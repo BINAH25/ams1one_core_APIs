@@ -45,6 +45,57 @@ All endpoints require `Authorization: Bearer <access_token>`.
 27. [Liquidation Card](#liquidation-card)
 28. [Settlements Card](#settlements-card)
 
+### Supervisors
+- [Register Supervisor](#register-supervisor)
+- [Edit Supervisor](#edit-supervisor)
+- [List Supervisors with Owner Details](#list-supervisors-with-owner-details)
+- [Detail Cards](#detail-cards)
+- [Snapshot](#supervisor-snapshot)
+- [Summary](#summary)
+- [Writers Overview](#writers-overview)
+- [Transactions](#transactions)
+- [Dashboard](#dashboard)
+- [Statistics](#statistics)
+- [Writers (Authenticated Supervisor)](#writers-authenticated-supervisor)
+- [Create Writer](#create-writer)
+- [Writer Detail](#writer-detail)
+- [Writer Top-Ups](#writer-top-ups)
+- [Writer Sales](#writer-sales)
+- [Writer Sales Summary](#writer-sales-summary)
+- [Today's Top-Up](#todays-top-up)
+- [Transaction Summary](#transaction-summary)
+
+### Reports
+- [List Reports](#list-reports)
+- [Get Report Schema](#get-report-schema)
+- [Execute Report](#execute-report)
+- [Download Report (Excel)](#download-report-excel)
+
+#### Report Catalogue
+| ID | Name | Category |
+|---|---|---|
+| 1 | [30 Days Sales Tracker](#report-1-30-days-sales-tracker) | Operations |
+| 2 | [Bank Transfer - Batch Details](#report-2-bank-transfer---batch-details) | Finance |
+| 3 | [Bank Transfers](#report-3-bank-transfers) | Finance |
+| 5 | [Commission Payments](#report-5-commission-payments) | Finance |
+| 6 | [Ticket Query](#report-6-ticket-query) | Finance |
+| 7 | [Daily Sales](#report-7-daily-sales) | Finance |
+| 8 | [Daily Sales & Winnings](#report-8-daily-sales--winnings) | Finance |
+| 9 | [Finance - Payout](#report-9-finance---payout) | Finance |
+| 14 | [Revenue Per Play](#report-14-revenue-per-play) | Finance |
+| 17 | [Ticket Status](#report-17-ticket-status) | General |
+| 18 | [Active Writers](#report-18-active-writers) | General |
+| 19 | [Terminal History](#report-19-terminal-history) | General |
+| 20 | [Winning Stakes Report](#report-20-winning-stakes-report) | General |
+| 21 | [All Stakes Report](#report-21-all-stakes-report) | Operations |
+| 23 | [Topup - Claims as Credit](#report-23-topup---claims-as-credit) | Finance |
+| 24 | [Topup - Supervisor Transfers](#report-24-topup---supervisor-transfers) | Finance |
+| 25 | [Topup - Mobile Money](#report-25-topup---mobile-money) | Finance |
+| 26 | [Writers - Active Writers](#report-26-writers---active-writers) | General |
+| 27 | [Export Top-Ups](#report-27-export-top-ups) | Finance |
+| 28 | [Export Sales](#report-28-export-sales) | Finance |
+| 29 | [Export Wins](#report-29-export-wins) | Finance |
+
 
 ---
 
@@ -1120,3 +1171,1236 @@ Returns the event header and a paginated list of tickets for a specific draw eve
 | `player_phone` | string | Player phone (empty for POS tickets) |
 | `stake_status` | string | `ACTIVE`, `WON`, `LOST`, or `CLAIMED` |
 | `writer` | object | `{ id, name, phone }` — writer who sold the ticket |
+
+---
+
+---
+
+# Reports Endpoints
+
+All reports endpoints are under **`/api/v1/financials/reports/`** and require **Operator or above** permission.
+
+Reports are stateless — every `execute` or `download` call runs the query fresh. Filters are passed as a JSON body on `execute`, or as query parameters on `download`.
+
+---
+
+## List Reports
+
+**`GET /api/v1/financials/reports/`**
+
+**Permission:** Operator or above
+
+Returns the full report registry — all available report IDs, names, categories, column schemas, and filter definitions.
+
+**Response `200 OK`**
+
+```json
+{
+  "status": true,
+  "message": "Reports retrieved successfully",
+  "data": [
+    {
+      "reportId": 1,
+      "name": "30 Days Sales Tracker",
+      "schema": {
+        "category": "Operations",
+        "columns": [...],
+        "filters": [...]
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Get Report Schema
+
+**`GET /api/v1/financials/reports/{reportId}/`**
+
+**Permission:** Operator or above
+
+Returns the schema for a single report — columns and filter definitions.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `reportId` | integer | Report ID |
+
+**Response `200 OK`**
+
+```json
+{
+  "reportId": 1,
+  "name": "30 Days Sales Tracker",
+  "schema": {
+    "category": "Operations",
+    "columns": [
+      { "key": "Writer ID", "label": "Writer ID", "required": true },
+      { "key": "Writer Name", "label": "Writer Name", "required": true }
+    ],
+    "filters": [
+      { "key": "entity_name", "label": "Writer Name", "type": "text", "required": false }
+    ]
+  }
+}
+```
+
+**`schema.columns[]`**
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string | Data key used in each result row |
+| `label` | string | Display label |
+| `required` | boolean | Whether the column is considered a primary/required field |
+
+**`schema.filters[]`**
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string | Filter key to pass in the request body |
+| `label` | string | Display label for the filter input |
+| `type` | string | Input type: `"text"`, `"date"` |
+| `required` | boolean | Whether the filter must be supplied to run the report |
+
+---
+
+## Execute Report
+
+**`POST /api/v1/financials/reports/{reportId}/execute/`**
+
+**Permission:** Operator or above
+
+Runs the report with the supplied filters and returns all matching rows as JSON, plus a `download_url` for the Excel file.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `reportId` | integer | Report ID |
+
+**Request Body**
+
+Pass any filters defined in the report's `schema.filters` as a flat JSON object. Omit optional filters to use their defaults (usually no restriction).
+
+```json
+{
+  "start_date": "2026-01-01",
+  "end_date": "2026-04-29"
+}
+```
+
+**Response `200 OK`**
+
+```json
+{
+  "status": true,
+  "message": "Report executed successfully",
+  "report_name": "Daily Sales & Winnings",
+  "count": 120,
+  "download_url": "https://example.com/api/v1/financials/reports/8/download/",
+  "data": [
+    { "Date": "2026-01-01", "Sales": "1200.00", "Winning": "800.00" }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | boolean | Always `true` on success |
+| `message` | string | Human-readable status message |
+| `report_name` | string | Name of the report |
+| `count` | integer | Number of rows returned |
+| `download_url` | string | Absolute URL to download the same data as `.xlsx` |
+| `data` | array | Report rows — keys match `schema.columns[].key` |
+
+**Error Responses**
+
+| Status | Description |
+|---|---|
+| `400` | `reportId` is not a valid integer |
+| `404` | Report ID does not exist or executor not implemented |
+
+---
+
+## Download Report (Excel)
+
+**`GET /api/v1/financials/reports/{reportId}/download/`**
+
+**Permission:** Operator or above
+
+Re-runs the report with optional query-string filters and streams the result as an Excel (`.xlsx`) file.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `reportId` | integer | Report ID |
+
+**Query Parameters**
+
+Pass any filters defined in `schema.filters` as query-string parameters. e.g. `?start_date=2026-01-01&end_date=2026-04-29`
+
+**Response**
+
+Binary `.xlsx` file download.
+
+```
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+Content-Disposition: attachment; filename="Daily_Sales_&_Winnings.xlsx"
+```
+
+The workbook contains a single sheet named after the report. The header row is styled with a dark-blue background and bold white text. Column widths are auto-fitted (capped at 40 characters).
+
+---
+
+---
+
+# Report Catalogue
+
+Full column and filter reference for all 21 available reports.
+
+---
+
+## Report 1: 30 Days Sales Tracker
+
+**Category:** Operations
+
+A per-writer breakdown of sales over the last 30 days, including lifetime stats, device info, and a daily column for each of the past 30 days (Day-1 = today).
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `entity_name` | Writer Name | text | No |
+
+**Columns**
+
+`Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Device`, `Serial`, `State`, `Days on Platform`, `Days-to-Start`, `Operation Days`, `Lifetime Sales`, `Avg Lifetime Sales`, `30 Days Total`, `30 Day Average`, `Date Onboarded`, `First Transaction`, `Last Transaction`, `Day-1` … `Day-30`
+
+---
+
+## Report 2: Bank Transfer - Batch Details
+
+**Category:** Finance
+
+Detailed breakdown of top-up transactions within a specific batch.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `batch_number` | Batch Number | text | No |
+| `reference` | Reference | text | No |
+
+**Columns**
+
+`Writer Name`, `Writer Phone`, `Supervisor Name`, `Supervisor Phone`, `Phone Number`, `Network`, `Client Reference`, `Amount`, `Description`, `Datetime`, `Updated At`, `Batch Number`, `UUID`
+
+---
+
+## Report 3: Bank Transfers
+
+**Category:** Finance
+
+All bank transfer records, optionally filtered by date range and account number.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `from` | From Date | date | No |
+| `to` | To Date | date | No |
+| `account` | Account Number | text | No |
+
+**Columns**
+
+`Datetime`, `Account Number`, `Reference`, `Amount`, `Success`, `Reason`, `Batch Number`, `Batch Date`
+
+---
+
+## Report 5: Commission Payments
+
+**Category:** Finance
+
+Commission amounts per writer for a given reference date.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `reference_date` | Reference Date | date | **Yes** |
+
+**Columns**
+
+`Writer`, `Phone Number`, `Supervisor`, `Supervisor Phone Number`, `Sales`, `Commission`
+
+---
+
+## Report 6: Ticket Query
+
+**Category:** Finance
+
+All stake lines on a specific ticket.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `ticket` | Ticket | text | **Yes** |
+
+**Columns**
+
+`Datetime`, `Ticket No.`, `Play`, `Original Stake`, `Stake`, `Amount`
+
+---
+
+## Report 7: Daily Sales
+
+**Category:** Finance
+
+All tickets sold on a given date (defaults to today).
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `date` | Date | date | No |
+
+**Columns**
+
+`Ticket Number`, `Game`, `Writer Name`, `Writer Number`, `Supervisor Name`, `Datetime of Ticket`, `Ticket Amount`
+
+---
+
+## Report 8: Daily Sales & Winnings
+
+**Category:** Finance
+
+Day-by-day summary of sales, winnings, and retention over a date range.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `start_date` | Start Date | date | **Yes** |
+| `end_date` | End Date | date | **Yes** |
+
+**Columns**
+
+`Date`, `Total Writers`, `Sales`, `Gross Income`, `Winning`, `Net Income`, `Retention Rate`
+
+---
+
+## Report 9: Finance - Payout
+
+**Category:** Finance
+
+Writer withdrawal (payout) transactions, optionally filtered by date range.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `start_date` | Start Date | date | No |
+| `end_date` | End Date | date | No |
+
+**Columns**
+
+`Writer ID`, `Writer Name`, `Writer Phone #`, `Transaction Date`, `Withdrawal`, `Bank Reference`
+
+---
+
+## Report 14: Revenue Per Play
+
+**Category:** Finance
+
+Total ticket count and amount grouped by game and play variety over a date range.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `start_date` | Start Date | date | **Yes** |
+| `end_date` | End Date | date | **Yes** |
+
+**Columns**
+
+`Date`, `Game`, `Play Variety`, `Total Tickets`, `Total Amount`
+
+---
+
+## Report 17: Ticket Status
+
+**Category:** General
+
+Full stake-level status history for a single ticket number.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `ticket` | Ticket | text | **Yes** |
+
+**Columns**
+
+`Ticket`, `Event ID`, `Event Name`, `Event Display`, `Occurrence Date`, `Writer Phone`, `Player Phone`, `Stake No.`, `Stake Amount`, `Payout`, `Status`, `Reason`, `Created At`, `Payout Time`
+
+---
+
+## Report 18: Active Writers
+
+**Category:** General
+
+All currently active writers — ID, name, phone, terminal number, location, and join date.
+
+**Filters**
+
+None
+
+**Columns**
+
+`ID`, `Name`, `Phone Number`, `Terminal Number`, `Location`, `Joined Date`
+
+---
+
+## Report 19: Terminal History
+
+**Category:** General
+
+Device/terminal usage history, optionally filtered by terminal number or MAC address.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `terminal_number` | Terminal Number | text | No |
+| `mac_address` | MAC Address | text | No |
+
+**Columns**
+
+`Terminal`, `MAC Address`, `Writer Name`, `Phone Number`, `First Use`
+
+---
+
+## Report 20: Winning Stakes Report
+
+**Category:** General
+
+Winning stake details optionally filtered by date range or ticket number.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `start_date` | Start Date | date | No |
+| `end_date` | End Date | date | No |
+| `ticket` | Ticket | text | No |
+
+**Columns**
+
+`Writer`, `Supervisor`, `Ticket`, `Purchase Amount`, `Stake`, `Draw`, `Event`, `Play`, `Variety`, `Payout`, `Date of Stake`, `Date of Winning`
+
+---
+
+## Report 21: All Stakes Report
+
+**Category:** Operations
+
+Every stake across all tickets within a date range. Can be large — use the download endpoint for bulk exports.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `start_date` | Start Date | date | **Yes** |
+| `end_date` | End Date | date | **Yes** |
+
+**Columns**
+
+`Ticket`, `Ticket Number`, `Writer Name`, `Writer Phone`, `Supervisor Name`, `Supervisor Phone`, `Game`, `Event`, `Round`, `Variety`, `Status`, `Numbers`, `Amount`, `Payout`, `Date`
+
+---
+
+## Report 23: Topup - Claims as Credit
+
+**Category:** Finance
+
+Top-up transactions funded from a writer's claims wallet, optionally filtered by date range.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `from` | Date From | date | No |
+| `to` | Date To | date | No |
+
+**Columns**
+
+`Writer Name`, `Writer Phone`, `Supervisor Name`, `Supervisor Phone`, `Phone Number`, `Network`, `Client Reference`, `Amount`, `Description`, `Datetime`, `Updated At`, `Batch Number`, `UUID`
+
+---
+
+## Report 24: Topup - Supervisor Transfers
+
+**Category:** Finance
+
+Top-up transactions processed via supervisor transfers, optionally filtered by date range.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `from` | Date From | date | No |
+| `to` | Date To | date | No |
+
+**Columns**
+
+`Writer Name`, `Writer Phone`, `Supervisor Name`, `Supervisor Phone`, `Phone Number`, `Network`, `Client Reference`, `Amount`, `Description`, `Datetime`, `Updated At`, `Batch Number`, `UUID`
+
+---
+
+## Report 25: Topup - Mobile Money
+
+**Category:** Finance
+
+Top-up transactions processed via mobile money, optionally filtered by date range.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `from` | Date From | date | No |
+| `to` | Date To | date | No |
+
+**Columns**
+
+`Writer Name`, `Writer Phone`, `Supervisor Name`, `Supervisor Phone`, `Phone Number`, `Network`, `Client Reference`, `Amount`, `Net Value`, `Description`, `Batch Number`, `UUID`, `Datetime`, `Updated At`
+
+---
+
+## Report 26: Writers - Active Writers
+
+**Category:** General
+
+Active writer count and writer details grouped by period over a date range.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `start_date` | Start Date | date | **Yes** |
+| `end_date` | End Date | date | **Yes** |
+
+**Columns**
+
+`Period`, `Active Writers`, `Writer Name`, `Phone Number`
+
+---
+
+## Report 27: Export Top-Ups
+
+**Category:** Finance
+
+All top-up transactions within a date range — suitable for bulk export.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `from_date` | From Date | date | **Yes** |
+| `to_date` | To Date | date | **Yes** |
+
+**Columns**
+
+`Date`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Amount (GHS)`, `Airtime Credited`, `Method`, `Reference`, `Created By`
+
+---
+
+## Report 28: Export Sales
+
+**Category:** Finance
+
+All ticket sales within a date range — suitable for bulk export.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `from_date` | From Date | date | **Yes** |
+| `to_date` | To Date | date | **Yes** |
+
+**Columns**
+
+`Date`, `Ticket No`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Game`, `Draw Event`, `Stakes`, `Amount (GHS)`, `Status`, `Channel`, `Player Phone`
+
+---
+
+## Report 29: Export Wins
+
+**Category:** Finance
+
+All winning tickets within a date range — suitable for bulk export.
+
+**Filters**
+
+| Key | Label | Type | Required |
+|---|---|---|---|
+| `from_date` | From Date | date | **Yes** |
+| `to_date` | To Date | date | **Yes** |
+
+**Columns**
+
+`Date Won`, `Ticket No`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Game`, `Draw Event`, `Ticket Amount (GHS)`, `Win Amount (GHS)`, `Status`, `Claimed At`, `Expires At`
+
+---
+
+---
+
+# Supervisor Endpoints
+
+All supervisor endpoints are under **`/api/v1/supervisors/`** and require `Authorization: Bearer <token>`.
+
+---
+
+## Standard CRUD
+
+| Method | URL | Permission | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/supervisors/` | Supervisor or above | List all supervisors. Supervisor role sees own record only. |
+| `GET` | `/api/v1/supervisors/{pk}/` | Supervisor or above | Retrieve a single supervisor. |
+| `POST` | `/api/v1/supervisors/` | Operator or above | Create supervisor (requires existing user UUID via `owner` field). |
+| `PATCH` | `/api/v1/supervisors/{pk}/` | Supervisor or above | Partial update via write serializer (`address`, `owner`, `is_active`). |
+| `DELETE` | `/api/v1/supervisors/{pk}/` | Operator or above | Soft-delete a supervisor. |
+
+---
+
+## Register Supervisor
+
+**`POST /api/v1/supervisors/register/`**
+
+**Permission:** Supervisor or above
+
+Creates a new `User` (role=`supervisor`) and a linked `Supervisor` record in one atomic transaction. Auto-generates the supervisor code (e.g. `SUP-0002`).
+
+**Request Body**
+
+```json
+{
+  "email": "john.doe@example.com",
+  "first_name": "John",
+  "last_name": "Doe",
+  "phone": "+233501234567",
+  "password": "securepass123",
+  "address": "45 Ring Road Central, Accra"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `email` | string | Yes | Must be unique across all users |
+| `first_name` | string | Yes | — |
+| `last_name` | string | Yes | — |
+| `phone` | string | Yes | E.164 format, must be unique |
+| `password` | string | Yes | Minimum 8 characters |
+| `address` | string | No | Operating address |
+
+**Response `201 Created`**
+
+```json
+{
+  "id": "3efd7ffb-5aff-4bc9-adcd-f421c58b8065",
+  "code": "SUP-0002",
+  "name": "John Doe",
+  "phone": "+233501234567",
+  "address": "45 Ring Road Central, Accra",
+  "owner": { "id": "...", "email": "john.doe@example.com", "full_name": "John Doe" },
+  "is_active": true,
+  "created_at": "2026-04-29T10:00:00Z",
+  "updated_at": "2026-04-29T10:00:00Z"
+}
+```
+
+---
+
+## Edit Supervisor
+
+**`PATCH /api/v1/supervisors/{pk}/edit/`**
+
+**Permission:** Supervisor or above
+
+Updates a supervisor's personal details and/or active status. All fields are optional — send only the fields to change.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `pk` | UUID | Supervisor UUID |
+
+**Request Body**
+
+```json
+{
+  "first_name": "John",
+  "last_name": "Smith",
+  "phone": "+233501234568",
+  "address": "12 Liberation Road, Accra",
+  "is_active": true
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `first_name` | string | No | Updates the owner user's first name |
+| `last_name` | string | No | Updates the owner user's last name |
+| `phone` | string | No | E.164 format; validated for uniqueness (skipped if unchanged) |
+| `address` | string | No | Supervisor's operating address |
+| `is_active` | boolean | No | Activate or deactivate the supervisor |
+
+**Response `200 OK`**
+
+Full `SupervisorSerializer` output (same shape as Register response).
+
+---
+
+## List Supervisors with Owner Details
+
+**`GET /api/v1/supervisors/owners/`**
+
+**Permission:** Supervisor or above
+
+Returns all supervisors ordered by name, each with their full owner object.
+
+**Response `200 OK`**
+
+```json
+[
+  {
+    "id": "3efd7ffb-5aff-4bc9-adcd-f421c58b8065",
+    "code": "SUP-0001",
+    "name": "Super Visor",
+    "phone": "+233200000003",
+    "address": "123 Test Street, Accra",
+    "owner": { "id": "...", "email": "sup@example.com", "full_name": "Super Visor" },
+    "is_active": true,
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-04-29T10:00:00Z"
+  }
+]
+```
+
+---
+
+## Detail Cards
+
+**`GET /api/v1/supervisors/detail-cards/`**
+
+**Permission:** Supervisor or above
+
+Returns all supervisors with their latest operational snapshot and current-month financial aggregates. Supervisor role sees their own card only; operator and above sees all.
+
+**Response `200 OK`**
+
+```json
+[
+  {
+    "id": "3efd7ffb-5aff-4bc9-adcd-f421c58b8065",
+    "code": "SUP-0001",
+    "name": "Super Visor",
+    "phone": "+233200000003",
+    "address": "123 Test Street, Accra",
+    "photo_url": null,
+    "is_active": true,
+    "operational": {
+      "snapshot_date": "2026-04-28",
+      "active": 3,
+      "passive": 0,
+      "inactive": 0,
+      "recover": 0,
+      "no_use": 0,
+      "writers_total": 3,
+      "pos_issued": 0,
+      "pos_trading": 2,
+      "pos_recovery": 0
+    },
+    "financial": {
+      "wallet_balance": 500.00,
+      "monthly_topups": 1200.00,
+      "monthly_sales": 3400.00,
+      "monthly_commissions": 0.0
+    }
+  }
+]
+```
+
+**`operational` object**
+
+| Field | Type | Description |
+|---|---|---|
+| `snapshot_date` | string \| null | Date of the latest daily snapshot, or `null` if none yet |
+| `active` / `passive` / `inactive` / `recover` / `no_use` | integer | Live writer counts by status |
+| `writers_total` | integer | Total writers under this supervisor |
+| `pos_issued` / `pos_trading` / `pos_recovery` | integer | POS device counts from the latest snapshot |
+
+**`financial` object**
+
+| Field | Type | Description |
+|---|---|---|
+| `wallet_balance` | number | Sum of current `airtime_balance` across all writers' airtime wallets |
+| `monthly_topups` | number | Total top-up amount for the current calendar month |
+| `monthly_sales` | number | Total ticket sales for the current calendar month |
+| `monthly_commissions` | number | Always `0.0` (supervisors have no commission model) |
+
+---
+
+## Supervisor Snapshot
+
+**`GET /api/v1/supervisors/{pk}/snapshot/`**
+
+**Permission:** Supervisor or above
+
+Returns the most recent daily operational snapshot for a supervisor.
+
+**Response `200 OK`**
+
+```json
+{
+  "id": "...",
+  "supervisor": "3efd7ffb-5aff-4bc9-adcd-f421c58b8065",
+  "snapshot_date": "2026-04-28",
+  "active": 3,
+  "passive": 0,
+  "inactive": 0,
+  "recover": 0,
+  "no_use": 0,
+  "writers_total": 3,
+  "total_writers": 3,
+  "pos_issued": 0,
+  "pos_trading": 2,
+  "pos_recovery": 0,
+  "created_at": "2026-04-28T23:00:00Z"
+}
+```
+
+Returns `404` if no snapshot has been computed yet.
+
+---
+
+## Summary
+
+**`GET /api/v1/supervisors/{pk}/summary/`**
+
+**Permission:** Supervisor or above
+
+Returns supervisor info and YTD performance cards for a single supervisor, including contribution ratios against global totals.
+
+**Response `200 OK`**
+
+```json
+{
+  "supervisor_info": {
+    "name": "Super Visor",
+    "address": "123 Test Street, Accra",
+    "phone": "+233200000003",
+    "pos_issued": 0,
+    "pos_trading": 2,
+    "writers_total": 3
+  },
+  "summary": {
+    "ytd_sales": "3400.00",
+    "ytd_topups": "1200.00",
+    "ytd_winnings": "200.00",
+    "writers_count": 3,
+    "ytd_sales_ratio": 12,
+    "ytd_topups_ratio": 8,
+    "ytd_winnings_ratio": 5,
+    "writers_ratio": 4
+  }
+}
+```
+
+**`supervisor_info` fields**
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | string | Supervisor's full name |
+| `address` | string | Operating address |
+| `phone` | string | Phone number |
+| `pos_issued` | integer | POS devices issued (from latest snapshot) |
+| `pos_trading` | integer | POS devices trading (from latest snapshot) |
+| `writers_total` | integer | Total writers from latest snapshot |
+
+**`summary` fields**
+
+| Field | Type | Description |
+|---|---|---|
+| `ytd_sales` | decimal string | YTD ticket sales across this supervisor's writers |
+| `ytd_topups` | decimal string | YTD top-ups across this supervisor's writers |
+| `ytd_winnings` | decimal string | YTD win amounts on this supervisor's writers' tickets |
+| `writers_count` | integer | Current live writer count |
+| `ytd_sales_ratio` | integer | This supervisor's sales as % of global YTD sales |
+| `ytd_topups_ratio` | integer | This supervisor's top-ups as % of global YTD top-ups |
+| `ytd_winnings_ratio` | integer | This supervisor's winnings as % of global YTD winnings |
+| `writers_ratio` | integer | This supervisor's writers as % of all writers system-wide |
+
+---
+
+## Writers Overview
+
+**`GET /api/v1/supervisors/{pk}/writers-overview/`**
+
+**Permission:** Supervisor or above
+
+Paginated, filterable writer table for a single supervisor. Each writer is annotated with YTD sales, YTD top-ups, and days-on-task (distinct days with a valid ticket).
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `status` | string | Filter by writer status: `active`, `passive`, `inactive`, `recover`, `no_use` |
+| `search` | string | Filter by writer first or last name (case-insensitive) |
+| `page` | integer | Page number |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 3,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "...",
+      "writer_id": 32,
+      "name": "Frank Mawuli",
+      "phone": "+233244979958",
+      "status": "active",
+      "location_address": "Madina Market",
+      "ytd_sales": "14826.43",
+      "ytd_topups": "10291.00",
+      "dot": 28,
+      "created_at": "2026-01-15T08:00:00Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Writer UUID |
+| `writer_id` | integer | Human-readable writer ID |
+| `name` | string | Writer's full name |
+| `phone` | string | Writer's phone number |
+| `status` | string | Current writer status |
+| `location_address` | string | Writer's operating location |
+| `ytd_sales` | decimal string | YTD ticket sales (ACTIVE/WON/LOST/CLAIMED) |
+| `ytd_topups` | decimal string | YTD total top-up amount |
+| `dot` | integer | Days-on-task — distinct days with at least one valid ticket this year |
+| `created_at` | datetime | Date the writer was registered |
+
+---
+
+## Transactions
+
+**`GET /api/v1/supervisors/{pk}/transactions/`**
+
+**Permission:** Supervisor or above
+
+Paginated, unified transaction ledger for a single supervisor — merges writer top-ups (money in) and successful withdrawals (money out) across all writers, sorted newest-first.
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `type` | string | Filter by type: `topup` or `withdrawal` |
+| `date_from` | date | Filter from this date (`YYYY-MM-DD`) inclusive |
+| `date_to` | date | Filter to this date (`YYYY-MM-DD`) inclusive |
+| `search` | string | Filter by writer name or phone (case-insensitive) |
+| `page` | integer | Page number |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 42,
+  "next": "...?page=2",
+  "previous": null,
+  "results": [
+    {
+      "created_at": "2026-04-28T14:30:00Z",
+      "type": "topup",
+      "writer_name": "Frank Mawuli",
+      "writer_phone": "+233244979958",
+      "reference": "TXN-00123",
+      "amount": "200.00",
+      "is_credit": true
+    },
+    {
+      "created_at": "2026-04-27T11:00:00Z",
+      "type": "withdrawal",
+      "writer_name": "Occc Appiah",
+      "writer_phone": "+233501234567",
+      "reference": "WD_abc123",
+      "amount": "150.00",
+      "is_credit": false
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `created_at` | datetime | Transaction timestamp |
+| `type` | string | `topup` — airtime top-up; `withdrawal` — claims wallet withdrawal |
+| `writer_name` | string | Writer's full name |
+| `writer_phone` | string \| null | Writer's phone number |
+| `reference` | string \| null | Transaction reference, or `null` if none |
+| `amount` | decimal string | Transaction amount in GHS |
+| `is_credit` | boolean | `true` for top-ups (money in), `false` for withdrawals (money out) |
+
+---
+
+## Dashboard
+
+**`GET /api/v1/supervisors/dashboard/`**
+
+**Permission:** Supervisor or above
+
+Returns current-month aggregates for the authenticated supervisor's writers.
+
+**Response `200 OK`**
+
+```json
+{
+  "monthly_topups": "1200.00",
+  "monthly_sales": "3400.00",
+  "active_writers": 3,
+  "total_writers": 3,
+  "month_start": "2026-04-01",
+  "month_end": "2026-04-30"
+}
+```
+
+---
+
+## Statistics
+
+**`GET /api/v1/supervisors/statistics/`**
+
+**Permission:** Supervisor or above
+
+Returns per-writer sales, stake count, and top-up totals for the authenticated supervisor's writers, ordered by total sales descending.
+
+**Response `200 OK`**
+
+```json
+{
+  "totalwriterFloat": "GHS 14,826.43",
+  "totalwriters": "3",
+  "writers": [
+    {
+      "sales": "GHS 14,826.43",
+      "total_stakes": "20",
+      "topup": "GHS 10,291.00",
+      "writer": {
+        "id": "32",
+        "name": "Frank Mawuli",
+        "profileImage": null,
+        "online": false,
+        "lastSeen": "2026-04-27 22:24:53",
+        "contact": { "email": "frank@writer.ams1one.com", "phone": "+233244979958" }
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Writers (Authenticated Supervisor)
+
+**`GET /api/v1/supervisors/writers/`**
+
+**Permission:** Supervisor or above
+
+Paginated, filterable list of writers belonging to the authenticated supervisor.
+
+**Query Parameters:** Supports all `WriterFilter` fields (status, search, etc.)
+
+---
+
+## Create Writer
+
+**`POST /api/v1/supervisors/create-writer/`**
+
+**Permission:** Supervisor or above
+
+Creates a new writer under the authenticated supervisor. Also creates the writer's `AirtimeWallet` and `ClaimsWallet`.
+
+**Request Body**
+
+```json
+{
+  "phone": "+233501234567",
+  "first_name": "Kwame",
+  "last_name": "Mensah",
+  "password": "securepass123",
+  "date_of_birth": "1990-05-15",
+  "location_address": "Tema Station, Accra"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `phone` | string | Yes | E.164 format, must be unique |
+| `first_name` | string | Yes | — |
+| `last_name` | string | Yes | — |
+| `password` | string | Yes | Minimum 8 characters |
+| `date_of_birth` | date | Yes | `YYYY-MM-DD`, used for KYC |
+| `location_address` | string | No | Writer's operating location |
+
+**Response `201 Created`** — Full `WriterSerializer` output.
+
+---
+
+## Writer Detail
+
+**`GET /api/v1/supervisors/writer-detail/?writer={uuid}`**
+
+**Permission:** Supervisor or above
+
+Returns the full profile for a single writer under the authenticated supervisor, including active POS device and wallet balances.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `writer` | UUID | Yes | Writer UUID |
+
+**Response `200 OK`**
+
+```json
+{
+  "id": "...",
+  "writer_id": 32,
+  "full_name": "Frank Mawuli",
+  "status": "active",
+  "phone": "+233244979958",
+  "airtime_balance": "500.00",
+  "claims_balance": "120.00",
+  "days_on_platform": 104,
+  "pos_device": {
+    "serial_number": "POS-001",
+    "device_type": "pos",
+    "status": "trading"
+  },
+  "date_of_birth": "1990-05-15",
+  "location_address": "Madina Market",
+  "created_at": "2026-01-15T08:00:00Z"
+}
+```
+
+---
+
+## Writer Top-Ups
+
+**`GET /api/v1/supervisors/writer-topups/?writer={uuid}`**
+
+**Permission:** Supervisor or above
+
+Paginated top-up history for a specific writer under the authenticated supervisor.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `writer` | UUID | Yes | Writer UUID |
+
+Supports all `WriterTopUpFilter` fields for further filtering.
+
+---
+
+## Writer Sales
+
+**`GET /api/v1/supervisors/writer-sales/?writer={uuid}`**
+
+**Permission:** Supervisor or above
+
+Paginated ticket sales history for a specific writer under the authenticated supervisor.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `writer` | UUID | Yes | Writer UUID |
+
+Supports all `WriterSalesFilter` fields for further filtering.
+
+---
+
+## Writer Sales Summary
+
+**`GET /api/v1/supervisors/writer-sales-summary/?writer={uuid}&date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`**
+
+**Permission:** Supervisor or above
+
+Date-ranged sales summary for a specific writer.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `writer` | UUID | Yes | Writer UUID |
+| `date_from` | date | Yes | Start date (`YYYY-MM-DD`) |
+| `date_to` | date | Yes | End date (`YYYY-MM-DD`) |
+
+---
+
+## Today's Top-Up
+
+**`GET /api/v1/supervisors/today-topup/`**
+
+**Permission:** Supervisor or above
+
+Returns today's top-up totals for the authenticated supervisor's writers.
+
+**Response `200 OK`**
+
+```json
+{
+  "date": "2026-04-29",
+  "total_topup": "GHS 400.00",
+  "total_topup_amount": 400.00,
+  "topup_count": 4,
+  "currency": "GHS"
+}
+```
+
+---
+
+## Transaction Summary
+
+**`GET /api/v1/supervisors/transaction-summary/?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`**
+
+**Permission:** Supervisor or above
+
+Date-ranged top-up and sales totals for the authenticated supervisor's writers.
+
+**Query Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `date_from` | date | Yes | Start date (`YYYY-MM-DD`) |
+| `date_to` | date | Yes | End date (`YYYY-MM-DD`) |
+
+**Response `200 OK`**
+
+```json
+{
+  "date_from": "2026-04-01",
+  "date_to": "2026-04-29",
+  "topups": "1200.00",
+  "sales": "3400.00"
+}
+```
