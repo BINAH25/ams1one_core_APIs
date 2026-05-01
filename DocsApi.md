@@ -12,6 +12,11 @@ All endpoints require `Authorization: Bearer <access_token>`.
 1. [Login Endpoint](#login-endpoint)
 2. [Logout Endpoint](#logout-endpoint)
 
+### Admin User Management
+- [List / Create Admin Users](#list--create-admin-users)
+- [Edit Admin User](#edit-admin-user)
+- [Activity Logs](#activity-logs)
+
 ### Sales — Dashboard
 3. [Writer Statistics Endpoint](#writer-statistics-endpoint)
 4. [Detailed Tickets Endpoint](#detailed-tickets-endpoint)
@@ -29,6 +34,10 @@ All endpoints require `Authorization: Bearer <access_token>`.
 17. [Draw Event Tickets](#draw-event-tickets)
 29. [Draws & Winnings Dashboard Card](#draws--winnings-dashboard-card)
 
+### Auto-Draw (Computerised Draw)
+- [Drawable Today](#drawable-today)
+- [Auto-Draw Event](#auto-draw-event)
+
 ### Analysis — Dashboard
 13. [Active Writer Daily Stats Endpoint](#active-writer-daily-stats-endpoint)
 14. [Download Active Writer Daily Stats Endpoint](#download-active-writer-daily-stats-endpoint)
@@ -44,6 +53,15 @@ All endpoints require `Authorization: Bearer <access_token>`.
 26. [Wins Card](#wins-card)
 27. [Liquidation Card](#liquidation-card)
 28. [Settlements Card](#settlements-card)
+
+### Writers — Dashboard
+- [Register Writer](#register-writer)
+- [All Writers](#all-writers)
+- [Writer Profile](#writer-profile)
+- [Writer Sales](#writer-sales-admin)
+- [Writer Winnings](#writer-winnings)
+- [Writer Top-Ups (Admin)](#writer-top-ups-admin)
+- [Writer Cashouts](#writer-cashouts)
 
 ### Supervisors
 - [Register Supervisor](#register-supervisor)
@@ -140,6 +158,195 @@ Blacklists the refresh token, invalidating the session.
 ```json
 {}
 ```
+
+---
+
+---
+
+# Admin User Management
+
+All endpoints below are under **`/api/v1/auth/users/`** and require **Admin** permission.
+
+---
+
+## List / Create Admin Users
+
+**`GET /api/v1/auth/users/admins/`** — List all admin and operator users (paginated, searchable).
+
+**`POST /api/v1/auth/users/admins/`** — Create a new admin or operator user.
+
+**Permission:** Admin only
+
+### GET — List
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `search` | string | Filter by first name, last name, or phone (case-insensitive) |
+| `page` | integer | Page number |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 2,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "a1b2c3d4-...",
+      "email": "admin@ams1one.com",
+      "first_name": "Kwame",
+      "last_name": "Asante",
+      "full_name": "Kwame Asante",
+      "phone": "+233501234567",
+      "role": "admin",
+      "is_active": true,
+      "photo": null
+    }
+  ]
+}
+```
+
+### POST — Create
+
+**Request Body**
+
+```json
+{
+  "email": "operator@ams1one.com",
+  "first_name": "Kwame",
+  "last_name": "Asante",
+  "phone": "+233501234567",
+  "password": "securepass123",
+  "role": "operator"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `email` | string | Yes | Must be unique across all users |
+| `first_name` | string | Yes | — |
+| `last_name` | string | Yes | — |
+| `phone` | string | No | E.164 format; must be unique if provided |
+| `password` | string | Yes | Minimum 8 characters |
+| `role` | string | No | `"admin"` or `"operator"` — defaults to `"admin"` |
+
+**Response `201 Created`**
+
+```json
+{
+  "id": "a1b2c3d4-...",
+  "email": "operator@ams1one.com",
+  "first_name": "Kwame",
+  "last_name": "Asante",
+  "full_name": "Kwame Asante",
+  "phone": "+233501234567",
+  "role": "operator",
+  "is_active": true,
+  "photo": null
+}
+```
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `400` | Duplicate email or phone, or missing required field |
+| `403` | Caller is not an admin |
+
+---
+
+## Edit Admin User
+
+**`PATCH /api/v1/auth/users/{pk}/admin-edit/`**
+
+**Permission:** Admin only
+
+Partially updates an admin or operator user's details. All fields are optional.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `pk` | UUID | User UUID |
+
+**Request Body**
+
+```json
+{
+  "first_name": "Kofi",
+  "last_name": "Mensah",
+  "phone": "+233501234568",
+  "is_active": false
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `first_name` | string | No | — |
+| `last_name` | string | No | — |
+| `phone` | string | No | E.164 format; uniqueness check skipped if phone is unchanged |
+| `is_active` | boolean | No | Activate or deactivate the user |
+
+**Response `200 OK`**
+
+Full `AdminUserSerializer` output (same shape as the list response).
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `400` | Target user is not an admin or operator, or duplicate phone |
+| `403` | Caller is not an admin |
+
+---
+
+## Activity Logs
+
+**`GET /api/v1/auth/users/activity-logs/`**
+
+**Permission:** Admin only
+
+Returns a paginated list of admin dashboard actions — user creation, edits, and logins — ordered newest-first.
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `page` | integer | Page number |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 10,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": 1,
+      "actor_name": "Kwame Asante",
+      "actor_email": "admin@ams1one.com",
+      "action": "create_admin",
+      "description": "Created admin user Kofi Mensah",
+      "created_at": "2026-04-30T10:00:00Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | integer | Log entry ID |
+| `actor_name` | string | Full name of the user who performed the action |
+| `actor_email` | string | Email of the actor |
+| `action` | string | One of: `login`, `create_admin`, `edit_admin` |
+| `description` | string | Human-readable description of the action |
+| `created_at` | datetime | When the action occurred |
+
+---
 
 ---
 
@@ -576,6 +783,362 @@ Returns the top N writers ranked by total sales (all-time).
 | `total_sales.amount` | number | Raw total sales amount |
 | `net_profit.formatted` | string | Formatted net profit (`total_sales - wins_paid`) |
 | `net_profit.amount` | number | Raw net profit amount |
+
+---
+
+---
+
+# Writers — Admin Endpoints
+
+All endpoints below are under **`/api/v1/writers/`** and require **Operator or above** permission.
+
+---
+
+## Register Writer
+
+**`POST /api/v1/writers/register/`**
+
+**Permission:** Operator or above
+
+Creates a new `User` (role=`writer`), a linked `Writer` record, and auto-initialises the `AirtimeWallet` and `ClaimsWallet` in one atomic transaction.
+
+**Request Body** (JSON or `multipart/form-data` when uploading a photo)
+
+```json
+{
+  "email": "jane.smith@writer.ams1one.com",
+  "first_name": "Jane",
+  "last_name": "Smith",
+  "phone": "+233501234567",
+  "password": "securepassword123",
+  "supervisor_id": "3efd7ffb-5aff-4bc9-adcd-f421c58b8065",
+  "date_of_birth": "1990-05-15",
+  "location_address": "Madina Market, Accra"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `email` | string | Yes | Must be unique across all users |
+| `first_name` | string | Yes | — |
+| `last_name` | string | Yes | — |
+| `phone` | string | Yes | E.164 format; must be unique |
+| `password` | string | Yes | Minimum 8 characters |
+| `photo` | file | No | Writer photo (multipart only) |
+| `supervisor_id` | UUID | Yes | UUID of the supervising `Supervisor` record |
+| `date_of_birth` | date | Yes | `YYYY-MM-DD` |
+| `location_address` | string | No | Operating location or landmark |
+
+**Response `201 Created`**
+
+Full `WriterSerializer` output including wallet balances.
+
+```json
+{
+  "id": "...",
+  "writer_id": 85,
+  "full_name": "Jane Smith",
+  "supervisor": { "id": "...", "code": "SUP-0001", "name": "Super Visor" },
+  "user": { "id": "...", "email": "jane.smith@writer.ams1one.com", "full_name": "Jane Smith" },
+  "status": "active",
+  "date_of_birth": "1990-05-15",
+  "location_address": "Madina Market, Accra",
+  "airtime_balance": "0.00",
+  "claims_balance": "0.00",
+  "last_transaction_date": null,
+  "days_on_platform": 0,
+  "created_at": "2026-04-30T10:00:00Z",
+  "updated_at": "2026-04-30T10:00:00Z"
+}
+```
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `400` | Duplicate email or phone, invalid `supervisor_id`, missing required field |
+| `403` | Caller is not operator or above |
+
+---
+
+## All Writers
+
+**`GET /api/v1/writers/all/`**
+
+**Permission:** Operator or above
+
+Paginated list of all writers with YTD sales, top-ups, and activity stats. Used for the admin writer table.
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `search` | string | Filter by first name, last name, or phone (case-insensitive) |
+| `status` | string | Filter by writer status: `active`, `passive`, `inactive`, `recover`, `no_use` |
+| `page` | integer | Page number |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 84,
+  "next": "...?page=2",
+  "previous": null,
+  "results": [
+    {
+      "id": "...",
+      "writer_id": 32,
+      "name": "Frank Mawuli",
+      "phone": "+233244979958",
+      "status": "active",
+      "supervisor_name": "Super Visor",
+      "location_address": "Madina Market",
+      "ytd_sales": "14826.43",
+      "ytd_topups": "10291.00",
+      "last_transaction": "2026-04-28T22:16:00Z",
+      "days_on_task": 28,
+      "created_at": "2026-01-15T08:00:00Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Writer UUID |
+| `writer_id` | integer | Human-readable writer ID |
+| `name` | string | Writer's full name |
+| `phone` | string | Writer's phone number |
+| `status` | string | Current writer status |
+| `supervisor_name` | string \| null | Full name of the supervising user |
+| `location_address` | string | Operating location |
+| `ytd_sales` | decimal string | YTD ticket sales (valid statuses only) |
+| `ytd_topups` | decimal string | YTD top-up total |
+| `last_transaction` | datetime \| null | Most recent valid ticket datetime |
+| `days_on_task` | integer | Distinct days with at least one valid ticket this year |
+| `created_at` | datetime | Registration date |
+
+---
+
+## Writer Profile
+
+**`GET /api/v1/writers/{pk}/profile/`**
+
+**Permission:** Operator or above
+
+Returns the full writer profile for the detail page — summary cards, wallet balances, YTD and month aggregates, and performance tier.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `pk` | UUID | Writer UUID |
+
+**Response `200 OK`**
+
+```json
+{
+  "id": "...",
+  "writer_id": 32,
+  "name": "Frank Mawuli",
+  "phone": "+233244979958",
+  "email": "frank@writer.ams1one.com",
+  "photo_url": null,
+  "status": "active",
+  "supervisor_name": "Super Visor",
+  "location_address": "Madina Market",
+  "date_of_birth": "1992-03-10",
+  "airtime_balance": "583.00",
+  "claims_balance": "0.00",
+  "ytd_sales": "14826.43",
+  "ytd_topups": "10291.00",
+  "ytd_winnings": "1200.00",
+  "month_sales": "2100.00",
+  "month_topups": "1500.00",
+  "last_transaction": "2026-04-28T22:16:00Z",
+  "days_on_task": 28,
+  "lifetime_avg_sale": "6.12",
+  "avg_topup": "245.02",
+  "tier": "Tier III",
+  "created_at": "2026-01-15T08:00:00Z"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `airtime_balance` | decimal string | Current airtime wallet balance |
+| `claims_balance` | decimal string | Current claims wallet balance |
+| `ytd_sales` | decimal string | YTD ticket sales |
+| `ytd_topups` | decimal string | YTD top-ups |
+| `ytd_winnings` | decimal string | YTD win amounts on this writer's tickets |
+| `month_sales` | decimal string | Current calendar month ticket sales |
+| `month_topups` | decimal string | Current calendar month top-ups |
+| `last_transaction` | datetime \| null | Most recent valid ticket datetime |
+| `days_on_task` | integer | Distinct days with at least one valid ticket this year |
+| `lifetime_avg_sale` | decimal string | Average ticket value (all time) |
+| `avg_topup` | decimal string | Average top-up amount (all time) |
+| `tier` | string | `Tier I` (≥ GHS 50k) / `Tier II` (≥ 20k) / `Tier III` (≥ 5k) / `Tier IV` (< 5k) based on YTD top-ups |
+
+---
+
+## Writer Sales (Admin) {#writer-sales-admin}
+
+**`GET /api/v1/writers/{pk}/writer-sales/`**
+
+**Permission:** Operator or above
+
+Paginated ticket sales for a specific writer, newest first.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `pk` | UUID | Writer UUID |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 256,
+  "next": "...?page=2",
+  "previous": null,
+  "results": [
+    {
+      "id": "...",
+      "ticket_no": "202604272216000084067183",
+      "sold_at": "2026-04-27T22:16:00Z",
+      "total_amount": "3.00",
+      "event_no": 137,
+      "event_name": "Tuesday Noon Rush",
+      "game": "VAG",
+      "stake_count": 2,
+      "status": "lost",
+      "plays": [
+        { "play": "Direct 2 (2 Sure)", "numbers": "24,69", "amount": "1.50" }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## Writer Winnings
+
+**`GET /api/v1/writers/{pk}/writer-winnings/`**
+
+**Permission:** Operator or above
+
+Paginated winnings for a specific writer, newest first.
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 12,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "...",
+      "ticket_no": "202604271200000032018291",
+      "event_no": 136,
+      "event_name": "Monday Special",
+      "game": "VAG",
+      "stake_amount": "5.00",
+      "win_amount": "125.00",
+      "status": "claimed",
+      "computed_at": "2026-04-27T14:00:00Z",
+      "plays": [
+        { "play": "Direct 3 (3 Sure)", "numbers": "11,34,67", "amount": "5.00" }
+      ]
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `stake_amount` | decimal string | Total ticket amount |
+| `win_amount` | decimal string | Amount won |
+| `status` | string | `pending`, `claimed`, `liquidated` |
+| `computed_at` | datetime | When the win was computed |
+
+---
+
+## Writer Top-Ups (Admin) {#writer-top-ups-admin}
+
+**`GET /api/v1/writers/{pk}/writer-topups/`**
+
+**Permission:** Operator or above
+
+Paginated top-up history for a specific writer, newest first.
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 42,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "...",
+      "created_at": "2026-04-28T10:00:00Z",
+      "method": "bank_transfer",
+      "reference": "BATCH-001",
+      "amount": "500.00",
+      "airtime_credited": "500.00",
+      "notes": ""
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `method` | string | Top-up method e.g. `bank_transfer`, `mobile_money`, `claims` |
+| `reference` | string | Batch or transaction reference |
+| `amount` | decimal string | GHS amount deposited |
+| `airtime_credited` | decimal string | Airtime credited to wallet |
+
+---
+
+## Writer Cashouts
+
+**`GET /api/v1/writers/{pk}/writer-cashouts/`**
+
+**Permission:** Operator or above
+
+Paginated successful withdrawal history for a specific writer, newest first.
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 8,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "...",
+      "created_at": "2026-04-27T11:00:00Z",
+      "mobile_number": "+233244979958",
+      "mobile_provider": "mtn",
+      "reference": "WD_abc123",
+      "amount": "150.00",
+      "status": "success"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `mobile_provider` | string | Mobile money provider e.g. `mtn`, `vodafone`, `airteltigo` |
+| `reference` | string | Paystack transfer reference |
+| `amount` | decimal string | Amount withdrawn in GHS |
+| `status` | string | Always `success` (only successful cashouts are returned) |
 
 ---
 
@@ -1162,6 +1725,133 @@ Returns the event header and a paginated list of tickets for a specific draw eve
 | `player_phone` | string | Player phone (empty for POS tickets) |
 | `stake_status` | string | `ACTIVE`, `WON`, `LOST`, or `CLAIMED` |
 | `writer` | object | `{ id, name, phone }` — writer who sold the ticket |
+
+---
+
+## Drawable Today
+
+**`GET /api/v1/games/events/drawable-today/`**
+
+**Permission:** Admin or Draw Master only
+
+Returns today's events eligible for auto-draw — events with `draw_date = today` and status `OPEN` or `CLOSED`. Used to populate the "Create Draw" modal dropdown. Already-DRAWN events are excluded.
+
+**Response `200 OK`**
+
+```json
+[
+  {
+    "id": "5e85fb71-7b5f-4b4a-b516-0799778a70e6",
+    "event_no": 244,
+    "game_type_name": "VAG",
+    "draw_date": "2026-04-30",
+    "status": "open",
+    "label": "#244 — VAG (30 Apr 2026)"
+  },
+  {
+    "id": "1774c0fe-8b10-426a-8949-012ddfddde9f",
+    "event_no": 936,
+    "game_type_name": "Noonrush",
+    "draw_date": "2026-04-30",
+    "status": "closed",
+    "label": "#936 — Noonrush (30 Apr 2026)"
+  }
+]
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Draw event UUID — pass to `/auto-draw/` endpoint |
+| `event_no` | integer | Sequential event number |
+| `game_type_name` | string | Display name of the game |
+| `draw_date` | date | `YYYY-MM-DD` |
+| `status` | string | `open` or `closed` |
+| `label` | string | Pre-formatted display label for the dropdown |
+
+---
+
+## Auto-Draw Event
+
+**`POST /api/v1/games/events/{id}/auto-draw/`**
+
+**Permission:** Admin or Draw Master only
+
+Computerised draw — runs a greedy algorithm against all active tickets to pick winning numbers that minimise total payout. Commits the draw and triggers asynchronous win computation. If the event is `OPEN`, it is auto-closed first.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | UUID | Draw event UUID |
+
+**Request Body** (optional)
+
+```json
+{ "draw_size": 5 }
+```
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `draw_size` | integer | No | `5` | Number of winning numbers to draw |
+
+**Response `201 Created`**
+
+```json
+{
+  "draw_result": {
+    "id": "e765a268-561c-4418-9360-42185365f813",
+    "draw_event": "5e85fb71-7b5f-4b4a-b516-0799778a70e6",
+    "game_type": {
+      "id": "...",
+      "name": "5/90 Original",
+      "code": "590_OG",
+      "number_pool": 90,
+      "numbers_drawn": 5
+    },
+    "numbers": [32, 22, 56, 57, 36],
+    "machine_numbers": null,
+    "pre_draw_sales": "1009.50",
+    "post_draw_sales_1": "0.00",
+    "post_draw_sales_2": "0.00",
+    "total_winnings": "0.00",
+    "payout_ratio": "0.00",
+    "drawn_at": "2026-05-01T09:29:11Z",
+    "processed_at": null
+  },
+  "projected_payout": 0.0,
+  "total_sales": 1009.5,
+  "house_margin": 1009.5,
+  "ticket_count": 200
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `draw_result.numbers` | array | The 5 winning numbers committed to the draw |
+| `draw_result.pre_draw_sales` | decimal string | Total ticket sales captured at draw time |
+| `draw_result.processed_at` | datetime \| null | Set after Celery `compute_wins` finishes |
+| `projected_payout` | number | Greedy's predicted total payout for these numbers |
+| `total_sales` | number | Total ticket sales for the event |
+| `house_margin` | number | `total_sales - projected_payout` |
+| `ticket_count` | integer | Number of active tickets evaluated |
+
+**Behaviour**
+
+- Event status `OPEN` → automatically transitioned to `CLOSED`, then drawn
+- Event status `CLOSED` → drawn immediately
+- Event status `DRAWN` → returns `400` with `DrawAlreadyProcessedError`
+
+After this endpoint returns, the `DrawResult` post-save signal fires the Celery `compute_wins` task asynchronously. Win records and writer ClaimsWallet credits land within seconds.
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `400` | Event already drawn (`DrawAlreadyProcessedError`) |
+| `403` | Caller is not Admin or Draw Master |
+| `404` | Draw event UUID not found |
+
+For a deeper explanation of the greedy algorithm, see [docs/AUTO_DRAW_ALGORITHM.md](docs/AUTO_DRAW_ALGORITHM.md).
 
 ---
 
