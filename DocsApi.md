@@ -550,9 +550,9 @@ Returns today's total win amount and unique winning players.
 
 ---
 
-## Winning Events Endpoint
+## Winning Events Endpoint {#winning-events-endpoint}
 
-**`GET /api/v1/sales/wins/winning_events/`**
+**`GET /api/v1/sales/wins/winning-events/`**
 
 **Permission:** Operator or above
 
@@ -581,9 +581,9 @@ Returns today's draw events with their winning numbers.
 
 ---
 
-## Winners List Endpoint
+## Winners List Endpoint {#winners-list-endpoint}
 
-**`GET /api/v1/sales/wins/winners_list/`**
+**`GET /api/v1/sales/wins/winners-list/`**
 
 **Permission:** Operator or above
 
