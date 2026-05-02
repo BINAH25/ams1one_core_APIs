@@ -63,6 +63,14 @@ All endpoints require `Authorization: Bearer <access_token>`.
 - [Writer Top-Ups (Admin)](#writer-top-ups-admin)
 - [Writer Cashouts](#writer-cashouts)
 
+### Players — Dashboard
+- [List Players](#list-players)
+- [Player Stats](#player-stats)
+- [Player Detail](#player-detail)
+- [Player Tickets](#player-tickets)
+- [Player Wins](#player-wins)
+- [Player Transactions](#player-transactions)
+
 ### Supervisors
 - [Register Supervisor](#register-supervisor)
 - [Edit Supervisor](#edit-supervisor)
@@ -2436,6 +2444,351 @@ All winning tickets within a date range — suitable for bulk export.
 `Date Won`, `Ticket No`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Game`, `Draw Event`, `Ticket Amount (GHS)`, `Win Amount (GHS)`, `Status`, `Claimed At`, `Expires At`
 
 ---
+
+---
+
+# Players — Dashboard Endpoints
+
+All player endpoints are under **`/api/v1/sales/player/`** and require **Operator or above** permission.
+
+---
+
+## List Players
+
+**`GET /api/v1/sales/player/list/`**
+
+**Permission:** Operator or above
+
+Paginated list of all registered players with a wallet snapshot per player.
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `search` | string | Filter by first name, last name, phone, or email (case-insensitive) |
+| `page` | integer | Page number |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 20,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "141abed7-da9e-4270-8999-ebdd0ec6f0dd",
+      "full_name": "Akosua Boateng",
+      "phone": "+233550000006",
+      "email": "player6@ams1one.com",
+      "joined": "2026-05-02T19:50:01.128926+00:00",
+      "wallet": {
+        "balance": "452.00",
+        "total_deposited": "508.00",
+        "total_won": "93.00",
+        "total_withdrawn": "18.00"
+      }
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Player user UUID |
+| `full_name` | string | Player's full name |
+| `phone` | string | Player's phone number |
+| `email` | string | Player's email address |
+| `joined` | datetime | Account creation timestamp |
+| `wallet` | object \| null | Wallet snapshot — `null` if no wallet exists yet |
+| `wallet.balance` | decimal string | Current spendable balance |
+| `wallet.total_deposited` | decimal string | Lifetime deposits |
+| `wallet.total_won` | decimal string | Lifetime wins credited |
+| `wallet.total_withdrawn` | decimal string | Lifetime withdrawals |
+
+---
+
+## Player Stats
+
+**`GET /api/v1/sales/player/stats/`**
+
+**Permission:** Operator or above
+
+Aggregate dashboard statistics across all players.
+
+**Response `200 OK`**
+
+```json
+{
+  "total_players": 20,
+  "active_today": 5,
+  "tickets_today": 12,
+  "wallet_totals": {
+    "total_balance": "4820.00",
+    "total_deposited": "7340.00",
+    "total_won": "1120.00",
+    "total_withdrawn": "640.00"
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `total_players` | integer | Total registered players in the system |
+| `active_today` | integer | Distinct players who placed at least one ticket today |
+| `tickets_today` | integer | Total tickets placed by players today |
+| `wallet_totals.total_balance` | decimal string | Sum of all player wallet balances |
+| `wallet_totals.total_deposited` | decimal string | Sum of all lifetime deposits |
+| `wallet_totals.total_won` | decimal string | Sum of all lifetime wins credited |
+| `wallet_totals.total_withdrawn` | decimal string | Sum of all lifetime withdrawals |
+
+---
+
+## Player Detail
+
+**`GET /api/v1/sales/player/{id}/detail/`**
+
+**Permission:** Operator or above
+
+Returns a single player's full profile, wallet summary, and ticket status counts.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | UUID | Player user UUID |
+
+**Response `200 OK`**
+
+```json
+{
+  "id": "141abed7-da9e-4270-8999-ebdd0ec6f0dd",
+  "full_name": "Akosua Boateng",
+  "phone": "+233550000006",
+  "email": "player6@ams1one.com",
+  "joined": "2026-05-02T19:50:01.128926+00:00",
+  "wallet": {
+    "id": "118fff21-863c-43df-86cf-930dbdfeeed8",
+    "full_name": "Akosua Boateng",
+    "phone": "+233550000006",
+    "email": "player6@ams1one.com",
+    "balance": "452.00",
+    "total_deposited": "508.00",
+    "total_won": "93.00",
+    "total_withdrawn": "18.00",
+    "transactions": []
+  },
+  "ticket_counts": {
+    "active": 2,
+    "won": 1,
+    "lost": 3,
+    "claimed": 0,
+    "cancelled": 0,
+    "expired": 0
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `wallet` | object \| null | Full wallet object including transaction history — `null` if no wallet |
+| `ticket_counts` | object | Count of tickets in each status for this player |
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `404` | Player UUID not found or user is not a player |
+
+---
+
+## Player Tickets
+
+**`GET /api/v1/sales/player/{id}/tickets/`**
+
+**Permission:** Operator or above
+
+Paginated ticket history for a specific player, newest first.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | UUID | Player user UUID |
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `status` | string | Filter by ticket status: `active`, `won`, `lost`, `claimed`, `cancelled`, `expired` |
+| `page` | integer | Page number |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 4,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "af23b3bf-...",
+      "ticket_no": "PL12345678901234567890",
+      "game_type": { "id": "...", "name": "NoonRush", "code": "590_NR" },
+      "draw_event": { "id": "...", "name": "Tuesday Noon Rush", "event_no": 137 },
+      "channel": "whatsapp",
+      "player_phone": "+233550000006",
+      "status": "lost",
+      "stake_count": 1,
+      "total_amount": "5.00",
+      "win_amount": null,
+      "win_status": null,
+      "win_expires_at": null,
+      "stakes": [
+        {
+          "id": "...",
+          "sequence_no": 1,
+          "play_type": { "id": "...", "name": "Direct 2 (2 Sure)", "code": "D2" },
+          "numbers": [14, 67],
+          "stake_amount": "5.00",
+          "total_amount": "5.00",
+          "is_winner": false
+        }
+      ],
+      "sold_at": "2026-05-02T18:00:00Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `win_amount` | decimal string \| null | Win amount if the ticket won, otherwise `null` |
+| `win_status` | string \| null | Win claim status: `pending`, `claimed`, `expired`, `voided` — or `null` |
+| `win_expires_at` | datetime \| null | Deadline for claiming the win, or `null` |
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `404` | Player UUID not found or user is not a player |
+
+---
+
+## Player Wins
+
+**`GET /api/v1/sales/player/{id}/wins/`**
+
+**Permission:** Operator or above
+
+Paginated win records for a specific player, newest first.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | UUID | Player user UUID |
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `status` | string | Filter by win status: `pending`, `claimed`, `expired`, `voided` |
+| `page` | integer | Page number |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 1,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "...",
+      "ticket": "af23b3bf-...",
+      "draw_result": "e765a268-...",
+      "win_amount": "1200.00",
+      "status": "pending",
+      "computed_at": "2026-05-02T14:00:00Z",
+      "claimed_at": null,
+      "expires_at": "2026-05-09T14:00:00Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `win_amount` | decimal string | Amount won |
+| `status` | string | `pending`, `claimed`, `expired`, or `voided` |
+| `computed_at` | datetime | When the win was computed after draw |
+| `claimed_at` | datetime \| null | When the win was claimed — `null` if unclaimed |
+| `expires_at` | datetime \| null | Claim deadline before liquidation |
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `404` | Player UUID not found or user is not a player |
+
+---
+
+## Player Transactions
+
+**`GET /api/v1/sales/player/{id}/transactions/`**
+
+**Permission:** Operator or above
+
+Paginated wallet transaction ledger for a specific player, newest first.
+
+**Path Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | UUID | Player user UUID |
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `tx_type` | string | Filter by transaction type: `deposit`, `ticket_purchase`, `win_credit`, `withdrawal`, `refund` |
+| `page` | integer | Page number |
+
+**Response `200 OK`**
+
+```json
+{
+  "count": 4,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "id": "73d7c1d9-...",
+      "tx_type": "ticket_purchase",
+      "amount": "42.00",
+      "balance_after": "452.00",
+      "description": "Ticket PL12345678901234567890",
+      "reference_id": "af23b3bf-...",
+      "created_at": "2026-05-02T19:50:01.131188Z"
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `tx_type` | string | `deposit` — mobile money deposit; `ticket_purchase` — ticket staked; `win_credit` — win credited; `withdrawal` — wallet withdrawal; `refund` — ticket refund |
+| `amount` | decimal string | Transaction amount in GHS |
+| `balance_after` | decimal string | Wallet balance immediately after this transaction |
+| `description` | string | Human-readable description |
+| `reference_id` | UUID \| null | Reference to the related ticket, win, or payment object |
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `404` | Player UUID not found, not a player, or no wallet found |
 
 ---
 
