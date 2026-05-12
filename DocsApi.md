@@ -17,6 +17,17 @@ All endpoints require `Authorization: Bearer <access_token>`.
 - [Edit Admin User](#edit-admin-user)
 - [Activity Logs](#activity-logs)
 
+### Dashboard Pages & Roles
+- [Get My Pages](#get-my-pages)
+- [Page Catalog](#page-catalog)
+- [Master page key list](#master-page-key-list)
+- [Dashboard Roles (CRUD)](#dashboard-roles)
+  - [List Roles](#list-roles)
+  - [Create Role](#create-role)
+  - [Retrieve Role](#retrieve-role)
+  - [Update Role](#update-role)
+  - [Delete Role](#delete-role)
+
 ### Sales — Dashboard
 3. [Writer Statistics Endpoint](#writer-statistics-endpoint)
 4. [Detailed Tickets Endpoint](#detailed-tickets-endpoint)
@@ -63,7 +74,12 @@ All endpoints require `Authorization: Bearer <access_token>`.
 - [Writer Top-Ups (Admin)](#writer-top-ups-admin)
 - [Writer Cashouts](#writer-cashouts)
 
+### POS Devices (Writer Self-Service)
+- [Register POS Device](#register-pos-device)
+- [Report Device Location](#report-device-location)
+
 ### Players — Dashboard
+Split per game family: Dollar Rush and 5/90. Each route below has a parallel `dollar-rush` and `five-ninety` URL — see the section preamble for the mapping.
 - [List Players](#list-players)
 - [Player Stats](#player-stats)
 - [Player Detail](#player-detail)
@@ -228,7 +244,8 @@ All endpoints below are under **`/api/v1/auth/users/`** and require **Admin** pe
   "last_name": "Asante",
   "phone": "+233501234567",
   "password": "securepass123",
-  "role": "operator"
+  "role": "operator",
+  "role_id": "5d2e8b1a-1f8c-4f3a-9e6d-7b9c1a2d3e4f"
 }
 ```
 
@@ -240,6 +257,7 @@ All endpoints below are under **`/api/v1/auth/users/`** and require **Admin** pe
 | `phone` | string | No | E.164 format; must be unique if provided |
 | `password` | string | Yes | Minimum 8 characters |
 | `role` | string | No | `"admin"` or `"operator"` — defaults to `"admin"` |
+| `role_id` | UUID | No | UUID of the [DashboardRole](#dashboard-roles) that decides which pages this user can see on the frontend. Omit or `null` to leave unassigned (user will see no pages). |
 
 **Response `201 Created`**
 
@@ -253,15 +271,19 @@ All endpoints below are under **`/api/v1/auth/users/`** and require **Admin** pe
   "phone": "+233501234567",
   "role": "operator",
   "is_active": true,
-  "photo": null
+  "photo": null,
+  "dashboard_role": { "id": "5d2e8b1a-...", "name": "Reports Manager" },
+  "pages": ["reports.list", "reports.execute", "reports.download"]
 }
 ```
+
+`dashboard_role` is `null` if the user has no role assigned. `pages` is `"*"` for admins, superusers, and any role other than `operator` (their menus are role-driven).
 
 **Error Responses**
 
 | Status | Cause |
 |---|---|
-| `400` | Duplicate email or phone, or missing required field |
+| `400` | Duplicate email or phone, missing required field, or unknown `role_id` |
 | `403` | Caller is not an admin |
 
 ---
@@ -287,7 +309,8 @@ Partially updates an admin or operator user's details. All fields are optional.
   "first_name": "Kofi",
   "last_name": "Mensah",
   "phone": "+233501234568",
-  "is_active": false
+  "is_active": false,
+  "role_id": "5d2e8b1a-1f8c-4f3a-9e6d-7b9c1a2d3e4f"
 }
 ```
 
@@ -297,10 +320,11 @@ Partially updates an admin or operator user's details. All fields are optional.
 | `last_name` | string | No | — |
 | `phone` | string | No | E.164 format; uniqueness check skipped if phone is unchanged |
 | `is_active` | boolean | No | Activate or deactivate the user |
+| `role_id` | UUID \| null | No | If provided, reassigns the user to that [DashboardRole](#dashboard-roles). Pass `null` to clear. Omit to leave unchanged. |
 
 **Response `200 OK`**
 
-Full `AdminUserSerializer` output (same shape as the list response).
+Full `AdminUserSerializer` output (same shape as the list response), including the user's current `dashboard_role` and derived `pages`.
 
 **Error Responses**
 
@@ -356,6 +380,241 @@ Returns a paginated list of admin dashboard actions — user creation, edits, an
 
 ---
 
+# Dashboard Pages & Roles
+
+Page-level access control for **admin and operator users only**, organised as reusable **roles**.
+
+**Concepts**
+
+- **Page** — a single navigable page on the dashboard, identified by a stable `key` (e.g. `sales.today_sales`). The frontend uses this key to decide whether to render a menu item.
+- **DashboardRole** — a named bundle of pages (e.g. *"Reports Manager"*, *"Sales Operator"*). An admin creates a role once, then assigns it to one or many users.
+- **Assignment** — each admin/operator user has at most one `dashboard_role`. The user's visible menu is the union of pages on that role.
+
+**Scope and boundaries**
+
+- Applies only to users with role `admin` or `operator`. Other roles (`writer`, `supervisor`, `draw_master`, `player`) have menus driven by their role and always return `"pages": "*"`.
+- **Superusers always see all pages** — the `pages` field returns `"*"` regardless of role assignment. This prevents an admin from accidentally locking themselves out.
+- This system controls **menu visibility on the frontend only**. API authorization is still enforced by DRF permission classes on every endpoint, independent of dashboard role.
+- No roles are seeded — the catalog starts empty. Admins create roles via the [Create Role](#create-role) endpoint and assign them to users via `role_id` on the [List / Create Admin Users](#list--create-admin-users) and [Edit Admin User](#edit-admin-user) endpoints.
+
+## Get My Pages
+
+**`GET /api/v1/auth/me/pages/`**
+
+**Permission:** Any authenticated user
+
+Returns the list of page keys the calling user is allowed to see. The frontend should call this immediately after login and use it to filter the menu.
+
+**Response `200 OK`** — operator with explicit grants:
+
+```json
+{
+  "role": "operator",
+  "is_superuser": false,
+  "pages": ["sales.today_sales", "writers.list", "reports.list"]
+}
+```
+
+**Response `200 OK`** — admin (or any non-operator role):
+
+```json
+{
+  "role": "admin",
+  "is_superuser": false,
+  "pages": "*"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `role` | string | User's role (`admin`, `operator`, `writer`, `supervisor`, `draw_master`, `player`) |
+| `is_superuser` | boolean | Whether this user is a Django superuser |
+| `pages` | array of strings \| `"*"` | List of granted page keys, or `"*"` for wildcard access |
+
+## Page Catalog
+
+**`GET /api/v1/permissions/pages/`**
+
+**Permission:** Admin only
+
+Returns the full catalog of dashboard pages available in the system. Used by the admin UI to render the "which pages can this user see" checkbox list when creating or editing an operator.
+
+**Response `200 OK`**
+
+```json
+[
+  {
+    "id": "...",
+    "key": "sales.today_sales",
+    "name": "Today's Sales",
+    "category": "Sales",
+    "order": 40,
+    "is_active": true
+  }
+]
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string | Stable identifier referenced from a DashboardRole's `page_keys`. Contract with the frontend menu. |
+| `name` | string | Human-readable label for the admin UI |
+| `category` | string | Display group, e.g. `"Sales"`, `"Reports"` |
+| `order` | integer | Within-category sort order |
+| `is_active` | boolean | Inactive pages are filtered out of `/me/pages/` but still listed here |
+
+### Master page key list
+
+These are the keys the backend recognises. Frontend menu registry must use the exact same strings.
+
+| Category | Key | Label |
+|---|---|---|
+| Admin User Management | `admin.users` | Admin Users |
+| Admin User Management | `admin.activity_logs` | Activity Logs |
+| Sales | `sales.writer_statistics` | Writer Statistics |
+| Sales | `sales.detailed_tickets` | Detailed Tickets |
+| Sales | `sales.game_types` | Game Types |
+| Sales | `sales.today_sales` | Today's Sales |
+| Sales | `sales.today_topups` | Today's Top-Ups |
+| Sales | `sales.available_float` | Available Float |
+| Sales | `sales.today_claims` | Today's Claims |
+| Sales | `sales.today_wins` | Today's Wins |
+| Sales | `sales.winning_events` | Winning Events |
+| Sales | `sales.winners_list` | Winners List |
+| Draw | `draw.draws_winnings_table` | Draws & Winnings Table |
+| Draw | `draw.draw_event_tickets` | Draw Event Tickets |
+| Draw | `draw.draws_winnings_card` | Draws & Winnings Card |
+| Auto-Draw | `autodraw.drawable_today` | Drawable Today |
+| Auto-Draw | `autodraw.event` | Auto-Draw Event |
+| Analysis | `analysis.active_writer_daily` | Active Writer Daily Stats |
+| Analysis | `analysis.active_writer_daily_download` | Active Writer Daily Download |
+| Analysis | `analysis.top_writers` | Top Writers |
+| Analysis | `analysis.topup_stats` | Top-Up Statistics |
+| Analysis | `analysis.winning_stats` | Winning Statistics |
+| Analysis | `analysis.best_worst` | Best & Worst Performance |
+| Analysis | `analysis.retention_rate` | Retention Rate |
+| Analysis | `analysis.retention_trend` | Retention Rate Trend |
+| Analysis | `analysis.sales_card` | Sales Card |
+| Analysis | `analysis.net_topups_card` | Net Top-Ups Card |
+| Analysis | `analysis.writers_at_work_card` | Writers at Work Card |
+| Analysis | `analysis.wins_card` | Wins Card |
+| Analysis | `analysis.liquidation_card` | Liquidation Card |
+| Analysis | `analysis.settlements_card` | Settlements Card |
+| Writers | `writers.register` | Register Writer |
+| Writers | `writers.list` | All Writers |
+| Writers | `writers.profile` | Writer Profile |
+| Writers | `writers.sales` | Writer Sales |
+| Writers | `writers.winnings` | Writer Winnings |
+| Writers | `writers.topups` | Writer Top-Ups |
+| Writers | `writers.cashouts` | Writer Cashouts |
+| Players — Dollar Rush | `players.dollar_rush.list` | List Players |
+| Players — Dollar Rush | `players.dollar_rush.stats` | Player Stats |
+| Players — Dollar Rush | `players.dollar_rush.detail` | Player Detail |
+| Players — 5/90 | `players.five_ninety.list` | List Players |
+| Players — 5/90 | `players.five_ninety.stats` | Player Stats |
+| Players — 5/90 | `players.five_ninety.detail` | Player Detail |
+| Supervisors | `supervisors.register` | Register Supervisor |
+| Supervisors | `supervisors.list` | List Supervisors |
+| Supervisors | `supervisors.detail` | Supervisor Detail |
+| Supervisors | `supervisors.snapshot` | Supervisor Snapshot |
+| Supervisors | `supervisors.summary` | Supervisor Summary |
+| Supervisors | `supervisors.writers_overview` | Writers Overview |
+| Supervisors | `supervisors.transactions` | Supervisor Transactions |
+| Reports | `reports.list` | List Reports |
+| Reports | `reports.execute` | Execute Report |
+| Reports | `reports.download` | Download Report |
+
+## Dashboard Roles
+
+CRUD for reusable role templates. All endpoints require **Admin** permission.
+
+### List Roles
+
+**`GET /api/v1/permissions/roles/`**
+
+Returns every role with its page keys and the current user count.
+
+**Response `200 OK`**
+
+```json
+[
+  {
+    "id": "5d2e8b1a-1f8c-4f3a-9e6d-7b9c1a2d3e4f",
+    "name": "Reports Manager",
+    "description": "Finance team — read-only access to reports.",
+    "page_keys": ["reports.list", "reports.execute", "reports.download"],
+    "user_count": 3,
+    "created_at": "2026-05-12T09:00:00Z",
+    "updated_at": "2026-05-12T09:00:00Z"
+  }
+]
+```
+
+### Create Role
+
+**`POST /api/v1/permissions/roles/`**
+
+This is the backend behind the "New Role" form.
+
+**Request Body**
+
+```json
+{
+  "name": "Reports Manager",
+  "description": "Finance team — read-only access to reports.",
+  "page_keys": ["reports.list", "reports.execute", "reports.download"]
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Unique across all roles (case-insensitive) |
+| `description` | string | No | Free-text explanation shown in the admin UI |
+| `page_keys` | array of strings | No | Page keys this role grants. Omit or `[]` for a role with no pages. |
+
+**Response `201 Created`** — same shape as the list entry above.
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `400` | Duplicate role name, unknown page key, or missing required field |
+| `403` | Caller is not an admin |
+
+### Retrieve Role
+
+**`GET /api/v1/permissions/roles/{id}/`** — same shape as the list entry.
+
+### Update Role
+
+**`PATCH /api/v1/permissions/roles/{id}/`**
+
+Partial update. All fields optional. If `page_keys` is provided, it **fully replaces** the role's pages (pass `[]` to clear). If `page_keys` is omitted, the page set is untouched.
+
+**Request Body** — same shape as create.
+
+**Response `200 OK`** — full role payload.
+
+Any user currently assigned this role sees the new page set immediately on their next `/me/pages/` call — no per-user update needed.
+
+### Delete Role
+
+**`DELETE /api/v1/permissions/roles/{id}/`**
+
+**Response `204 No Content`** on success.
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `400` | One or more users are still assigned to this role (`role_in_use`). Reassign them first. |
+| `403` | Caller is not an admin |
+
+---
+
+### Rollout notes for existing users
+
+No roles are seeded. After migration, every admin and operator user has `dashboard_role = null` — they will see no dashboard pages until a role is created and assigned. The bootstrap superuser (created via `createsuperuser`) bypasses this entirely and always sees `"pages": "*"`, so they can log in, create the first role, and assign it to others.
+
 ---
 
 ## Writer Statistics Endpoint
@@ -368,13 +627,13 @@ Returns per-writer sales, stakes, and top-up totals.
 
 ```json
 {
-  "totalwriterFloat": "GHS 14,826.43",
+  "totalwriterFloat": "USD 14,826.43",
   "totalwriters": "42",
   "writers": [
     {
-      "sales": "GHS 14,826.43",
+      "sales": "USD 14,826.43",
       "total_stakes": "20",
-      "topup": "GHS 10,291.00",
+      "topup": "USD 10,291.00",
       "writer": {
         "id": "32",
         "name": "Frank Mawuli",
@@ -461,7 +720,7 @@ Returns today's ticket sales totals, excluding cancelled tickets.
   "date": "2026-04-27",
   "total_sales": 20322.10,
   "ticket_count": 200,
-  "currency": "GHS"
+  "currency": "USD"
 }
 ```
 
@@ -470,7 +729,7 @@ Returns today's ticket sales totals, excluding cancelled tickets.
 | `date` | string | Today's date (ISO 8601) |
 | `total_sales` | number | Sum of all non-cancelled ticket amounts today |
 | `ticket_count` | integer | Count of non-cancelled tickets today |
-| `currency` | string | Always `"GHS"` |
+| `currency` | string | Always `"USD"` |
 
 ---
 
@@ -494,9 +753,9 @@ Returns the total available float — sum of `airtime_balance` across all writer
 
 ```json
 {
-  "available_float": "GHS 124,064.43",
+  "available_float": "USD 124,064.43",
   "available_float_amount": 124064.43,
-  "currency": "GHS"
+  "currency": "USD"
 }
 ```
 
@@ -504,7 +763,7 @@ Returns the total available float — sum of `airtime_balance` across all writer
 |---|---|---|
 | `available_float` | string | Formatted total airtime balance across all writers |
 | `available_float_amount` | number | Raw decimal value |
-| `currency` | string | Always `"GHS"` |
+| `currency` | string | Always `"USD"` |
 
 ---
 
@@ -521,7 +780,7 @@ Returns today's claimed win amounts and successful withdrawals.
   "date": "2026-04-07",
   "total_claims": 242846.40,
   "claims_withdrawn": 156942.60,
-  "currency": "GHS"
+  "currency": "USD"
 }
 ```
 
@@ -529,7 +788,7 @@ Returns today's claimed win amounts and successful withdrawals.
 |---|---|---|
 | `total_claims` | number | Sum of wins claimed today |
 | `claims_withdrawn` | number | Sum of successful withdrawals today |
-| `currency` | string | Always `"GHS"` |
+| `currency` | string | Always `"USD"` |
 
 ---
 
@@ -546,7 +805,7 @@ Returns today's total win amount and unique winning players.
   "date": "2026-04-07",
   "total_win_amount": 287738.40,
   "unique_players": 749,
-  "currency": "GHS"
+  "currency": "USD"
 }
 ```
 
@@ -554,7 +813,7 @@ Returns today's total win amount and unique winning players.
 |---|---|---|
 | `total_win_amount` | number | Sum of all wins computed today |
 | `unique_players` | integer | Distinct player phones on winning tickets today |
-| `currency` | string | Always `"GHS"` |
+| `currency` | string | Always `"USD"` |
 
 ---
 
@@ -755,11 +1014,11 @@ Returns the top N writers ranked by total sales (all-time).
       "writer_name": "Frank Mawuli",
       "photo_url": null,
       "total_sales": {
-        "formatted": "GHS 16,951.43",
+        "formatted": "USD 16,951.43",
         "amount": 16951.43
       },
       "net_profit": {
-        "formatted": "GHS 16,951.43",
+        "formatted": "USD 16,951.43",
         "amount": 16951.43
       }
     },
@@ -769,11 +1028,11 @@ Returns the top N writers ranked by total sales (all-time).
       "writer_name": "Occc Appiah",
       "photo_url": null,
       "total_sales": {
-        "formatted": "GHS 13,267.70",
+        "formatted": "USD 13,267.70",
         "amount": 13267.70
       },
       "net_profit": {
-        "formatted": "GHS 13,267.70",
+        "formatted": "USD 13,267.70",
         "amount": 13267.70
       }
     }
@@ -985,7 +1244,7 @@ Returns the full writer profile for the detail page — summary cards, wallet ba
 | `days_on_task` | integer | Distinct days with at least one valid ticket this year |
 | `lifetime_avg_sale` | decimal string | Average ticket value (all time) |
 | `avg_topup` | decimal string | Average top-up amount (all time) |
-| `tier` | string | `Tier I` (≥ GHS 50k) / `Tier II` (≥ 20k) / `Tier III` (≥ 5k) / `Tier IV` (< 5k) based on YTD top-ups |
+| `tier` | string | `Tier I` (≥ USD 50k) / `Tier II` (≥ 20k) / `Tier III` (≥ 5k) / `Tier IV` (< 5k) based on YTD top-ups |
 
 ---
 
@@ -1107,7 +1366,7 @@ Paginated top-up history for a specific writer, newest first.
 |---|---|---|
 | `method` | string | Top-up method e.g. `bank_transfer`, `mobile_money`, `claims` |
 | `reference` | string | Batch or transaction reference |
-| `amount` | decimal string | GHS amount deposited |
+| `amount` | decimal string | USD amount deposited |
 | `airtime_credited` | decimal string | Airtime credited to wallet |
 
 ---
@@ -1145,10 +1404,126 @@ Paginated successful withdrawal history for a specific writer, newest first.
 |---|---|---|
 | `mobile_provider` | string | Mobile money provider e.g. `mtn`, `vodafone`, `airteltigo` |
 | `reference` | string | Paystack transfer reference |
-| `amount` | decimal string | Amount withdrawn in GHS |
+| `amount` | decimal string | Amount withdrawn in USD |
 | `status` | string | Always `success` (only successful cashouts are returned) |
 
 ---
+
+# POS Devices (Writer Self-Service)
+
+These endpoints are called by the writer's POS app/device while authenticated as the writer user.
+
+---
+
+## Register POS Device
+
+**`POST /api/v1/writers/register-device/`**
+
+**Permission:** Writer (acting on their own profile)
+
+Registers a new POS device under the authenticated writer. Serial numbers are unique across the platform.
+
+**Request Body**
+
+```json
+{
+  "serial_number": "POS-AB12345",
+  "device_type": "POS"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `serial_number` | string | Yes | Unique device serial (max 60 chars) |
+| `device_type` | string | No | One of `POS`, `APP`, `WEB` — defaults to `POS` |
+
+**Response `201 Created`**
+
+```json
+{
+  "id": "0c8f9f1e-...",
+  "writer": "5d2e...",
+  "serial_number": "POS-AB12345",
+  "device_type": "pos",
+  "status": "issued",
+  "assigned_at": "2026-05-12T08:15:21Z",
+  "returned_at": null,
+  "notes": "",
+  "latitude": null,
+  "longitude": null,
+  "location_accuracy_m": null,
+  "location_reported_at": null
+}
+```
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `403` | Caller does not have a writer profile |
+| `409` | A device with that `serial_number` is already registered (`duplicate_serial_number`) |
+
+---
+
+## Report Device Location
+
+**`POST /api/v1/writers/report-location/`**
+
+**Permission:** Writer (acting on their own device)
+
+Updates the latest GPS coordinates of one of the authenticated writer's POS devices. The POS app should call this on a schedule (e.g. every 30–60s while open, or on significant location change). Only the most recent ping is stored — there is no history table.
+
+**Request Body**
+
+```json
+{
+  "serial_number": "POS-AB12345",
+  "latitude": 5.614818,
+  "longitude": -0.205874,
+  "accuracy_m": 12.5
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `serial_number` | string | Yes | Must belong to the authenticated writer |
+| `latitude` | decimal | Yes | Range `-90` to `90`, up to 6 decimal places |
+| `longitude` | decimal | Yes | Range `-180` to `180`, up to 6 decimal places |
+| `accuracy_m` | decimal | No | Reported GPS accuracy in metres (non-negative) |
+
+**Response `200 OK`**
+
+Returns the full `POSDevice` payload with the freshly stored location fields.
+
+```json
+{
+  "id": "0c8f9f1e-...",
+  "writer": "5d2e...",
+  "serial_number": "POS-AB12345",
+  "device_type": "pos",
+  "status": "trading",
+  "assigned_at": "2026-05-12T08:15:21Z",
+  "returned_at": null,
+  "notes": "",
+  "latitude": "5.614818",
+  "longitude": "-0.205874",
+  "location_accuracy_m": "12.50",
+  "location_reported_at": "2026-05-12T10:24:31.412Z"
+}
+```
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `400` | Missing fields, malformed decimals, or lat/lng out of range |
+| `403` | Caller does not have a writer profile |
+| `404` | No device with that `serial_number` exists under this writer |
+
+**Notes**
+- Coordinates overwrite the previous reading — there is no per-ping history.
+- `location_reported_at` is set server-side from `now()` on every successful call. Use it to display "last seen X seconds ago" on dashboards.
+- Decimal fields are returned as strings (per the platform-wide monetary/decimal convention).
 
 ---
 
@@ -1170,10 +1545,10 @@ Returns total writer top-ups for YTD and recent periods.
 
 ```json
 {
-  "ytd":           { "label": "YTD",           "total": "GHS 124,064.43", "total_amount": 124064.43 },
-  "last_week":     { "label": "Last Week",     "total": "GHS 4,200.00",   "total_amount": 4200.00 },
-  "last_month":    { "label": "Last Month",    "total": "GHS 18,500.00",  "total_amount": 18500.00 },
-  "last_3_months": { "label": "Last 3 Months", "total": "GHS 52,000.00",  "total_amount": 52000.00 }
+  "ytd":           { "label": "YTD",           "total": "USD 124,064.43", "total_amount": 124064.43 },
+  "last_week":     { "label": "Last Week",     "total": "USD 4,200.00",   "total_amount": 4200.00 },
+  "last_month":    { "label": "Last Month",    "total": "USD 18,500.00",  "total_amount": 18500.00 },
+  "last_3_months": { "label": "Last 3 Months", "total": "USD 52,000.00",  "total_amount": 52000.00 }
 }
 ```
 
@@ -1196,10 +1571,10 @@ Returns total win amounts for YTD and recent periods.
 
 ```json
 {
-  "ytd":           { "label": "YTD",           "total": "GHS 98,000.00", "total_amount": 98000.00 },
-  "last_week":     { "label": "Last Week",     "total": "GHS 3,100.00",  "total_amount": 3100.00 },
-  "last_month":    { "label": "Last Month",    "total": "GHS 14,200.00", "total_amount": 14200.00 },
-  "last_3_months": { "label": "Last 3 Months", "total": "GHS 40,500.00", "total_amount": 40500.00 }
+  "ytd":           { "label": "YTD",           "total": "USD 98,000.00", "total_amount": 98000.00 },
+  "last_week":     { "label": "Last Week",     "total": "USD 3,100.00",  "total_amount": 3100.00 },
+  "last_month":    { "label": "Last Month",    "total": "USD 14,200.00", "total_amount": 14200.00 },
+  "last_3_months": { "label": "Last 3 Months", "total": "USD 40,500.00", "total_amount": 40500.00 }
 }
 ```
 
@@ -1222,14 +1597,14 @@ Returns the best and worst performing calendar months year-to-date, by net profi
 {
   "best_month": {
     "month": "Jan '26",
-    "performance": "+ GHS 12,500.00",
+    "performance": "+ USD 12,500.00",
     "net_profit": 12500.00,
     "topups": 30000.00,
     "wins": 17500.00
   },
   "worst_month": {
     "month": "Mar '26",
-    "performance": "- GHS 2,000.00",
+    "performance": "- USD 2,000.00",
     "net_profit": -2000.00,
     "topups": 18000.00,
     "wins": 20000.00
@@ -1332,11 +1707,11 @@ Returns YTD total and net sales figures.
 
 ```json
 {
-  "total_sales": "GHS 200,000.00",
+  "total_sales": "USD 200,000.00",
   "total_sales_amount": 200000.00,
-  "net_sales": "GHS 102,000.00",
+  "net_sales": "USD 102,000.00",
   "net_sales_amount": 102000.00,
-  "currency": "GHS"
+  "currency": "USD"
 }
 ```
 
@@ -1357,11 +1732,11 @@ Returns YTD gross and net top-up totals.
 
 ```json
 {
-  "gross_topups": "GHS 124,064.43",
+  "gross_topups": "USD 124,064.43",
   "gross_topups_amount": 124064.43,
-  "net_topups": "GHS 124,064.43",
+  "net_topups": "USD 124,064.43",
   "net_topups_amount": 124064.43,
-  "currency": "GHS"
+  "currency": "USD"
 }
 ```
 
@@ -1399,10 +1774,10 @@ Returns YTD total win amount and number of winning stakes.
 
 ```json
 {
-  "total_wins": "GHS 98,000.00",
+  "total_wins": "USD 98,000.00",
   "total_wins_amount": 98000.00,
   "winning_stakes": 1204,
-  "currency": "GHS"
+  "currency": "USD"
 }
 ```
 
@@ -1423,11 +1798,11 @@ Returns YTD total liquidation amount and unclaimed win balance.
 
 ```json
 {
-  "total_liquidation": "GHS 5,200.00",
+  "total_liquidation": "USD 5,200.00",
   "total_liquidation_amount": 5200.00,
-  "unclaimed_coupons": "GHS 1,800.00",
+  "unclaimed_coupons": "USD 1,800.00",
   "unclaimed_coupons_amount": 1800.00,
-  "currency": "GHS"
+  "currency": "USD"
 }
 ```
 
@@ -1448,11 +1823,11 @@ Returns YTD total settlements and live claims wallet balance across all writers.
 
 ```json
 {
-  "total_settlements": "GHS 30,000.00",
+  "total_settlements": "USD 30,000.00",
   "total_settlements_amount": 30000.00,
-  "claim_wallet_balance": "GHS 12,500.00",
+  "claim_wallet_balance": "USD 12,500.00",
   "claim_wallet_balance_amount": 12500.00,
-  "currency": "GHS"
+  "currency": "USD"
 }
 ```
 
@@ -1474,26 +1849,26 @@ Returns three YTD card groups covering sales volume, winnings breakdown, and gro
 ```json
 {
   "ytd_sales": {
-    "total_sales": "GHS 200,000.00",
+    "total_sales": "USD 200,000.00",
     "total_sales_amount": 200000.00,
     "unique_players": 1204,
     "total_tickets": 3500,
     "total_stakes": 7200
   },
   "ytd_winnings": {
-    "total_winnings": "GHS 98,000.00",
+    "total_winnings": "USD 98,000.00",
     "total_winnings_amount": 98000.00,
-    "claimed": "GHS 80,000.00",
+    "claimed": "USD 80,000.00",
     "claimed_amount": 80000.00,
-    "unclaimed": "GHS 18,000.00",
+    "unclaimed": "USD 18,000.00",
     "unclaimed_amount": 18000.00
   },
   "ytd_ggr": {
-    "gross_gaming_revenue": "GHS 102,000.00",
+    "gross_gaming_revenue": "USD 102,000.00",
     "gross_gaming_revenue_amount": 102000.00,
     "retention_rate": "51.00%",
     "retention_rate_value": 51.0,
-    "retention_value": "GHS 102,000.00",
+    "retention_value": "USD 102,000.00",
     "retention_value_amount": 102000.00
   }
 }
@@ -1566,17 +1941,17 @@ Paginated table of all drawn events with their result data — draw numbers, mac
       "draw_date": "Tue, 28 Apr 2026",
       "event_name": "Tuesday Noon Rush",
       "draw_time": "12:00",
-      "pre_draw": "GHS 7,268.56",
+      "pre_draw": "USD 7,268.56",
       "pre_draw_amount": 7268.56,
       "draw_numbers": [80, 45, 77, 12, 30],
       "machine_numbers": null,
-      "post_draw_1": "GHS 0.00",
+      "post_draw_1": "USD 0.00",
       "post_draw_1_amount": 0.0,
-      "post_draw_2": "GHS 0.00",
+      "post_draw_2": "USD 0.00",
       "post_draw_2_amount": 0.0,
       "payout_ratio": "118.21%",
       "payout_ratio_value": 118.21,
-      "total_winnings": "GHS 8,592.00",
+      "total_winnings": "USD 8,592.00",
       "total_winnings_amount": 8592.0
     }
   ]
@@ -1634,7 +2009,7 @@ Returns the event header and a paginated list of tickets for a specific draw eve
     "event_no": 137,
     "event_name": "Tuesday Noon Rush",
     "draw_numbers": [80, 45, 77, 12, 30],
-    "total_wins": "GHS 8,592.00",
+    "total_wins": "USD 8,592.00",
     "total_wins_amount": 8592.0,
     "payout_ratio": "118.21%",
     "payout_ratio_value": 118.21,
@@ -1650,7 +2025,7 @@ Returns the event header and a paginated list of tickets for a specific draw eve
         "ticket_id": "af23b3bf-6542-40a6-91ae-931d9010ffb6",
         "ticket_no": "202604281329370090447304",
         "stake_count": 1,
-        "stake_value": "GHS 3.00",
+        "stake_value": "USD 3.00",
         "stake_value_amount": 3.0,
         "datetime": "Tue, 28 Apr 2026",
         "staked_by": "Raindolf Borketey",
@@ -2403,7 +2778,7 @@ All top-up transactions within a date range — suitable for bulk export.
 
 **Columns**
 
-`Date`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Amount (GHS)`, `Airtime Credited`, `Method`, `Reference`, `Created By`
+`Date`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Amount (USD)`, `Airtime Credited`, `Method`, `Reference`, `Created By`
 
 ---
 
@@ -2422,7 +2797,7 @@ All ticket sales within a date range — suitable for bulk export.
 
 **Columns**
 
-`Date`, `Ticket No`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Game`, `Draw Event`, `Stakes`, `Amount (GHS)`, `Status`, `Channel`, `Player Phone`
+`Date`, `Ticket No`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Game`, `Draw Event`, `Stakes`, `Amount (USD)`, `Status`, `Channel`, `Player Phone`
 
 ---
 
@@ -2441,7 +2816,7 @@ All winning tickets within a date range — suitable for bulk export.
 
 **Columns**
 
-`Date Won`, `Ticket No`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Game`, `Draw Event`, `Ticket Amount (GHS)`, `Win Amount (GHS)`, `Status`, `Claimed At`, `Expires At`
+`Date Won`, `Ticket No`, `Writer ID`, `Writer Name`, `Writer Phone`, `Supervisor`, `Game`, `Draw Event`, `Ticket Amount (USD)`, `Win Amount (USD)`, `Status`, `Claimed At`, `Expires At`
 
 ---
 
@@ -2449,17 +2824,32 @@ All winning tickets within a date range — suitable for bulk export.
 
 # Players — Dashboard Endpoints
 
-All player endpoints are under **`/api/v1/sales/player/`** and require **Operator or above** permission.
+Player endpoints are split per game family. Each endpoint exists under two parallel URL trees:
+
+| Game family | Base URL | Game type codes covered |
+|---|---|---|
+| Dollar Rush | `/api/v1/sales/players/dollar-rush/` | `DR` |
+| 5/90 (Original, Noonrush, Morning VAG) | `/api/v1/sales/players/five-ninety/` | `590_OG`, `590_NR`, `MVG` |
+
+**Permission:** Operator or above on every endpoint.
+
+**Scoping rules**
+
+- `list` and `stats` only include players who have placed at least one ticket in that game family. A player who plays both will appear under both routes.
+- `{id}/detail`, `{id}/tickets`, `{id}/wins` are scoped to the game family — a Dollar Rush player UUID requested under the 5/90 route returns `404`, and vice versa. `ticket_counts` in the detail response only reflect tickets in that family.
+- `{id}/transactions` returns the player's full wallet ledger. A PlayerWallet is shared across games — there is no per-game wallet — so both routes return identical data for the same player. The dual URL exists so the frontend can call it from either dashboard without branching.
+
+In the endpoint specs below, `{game}` represents either `dollar-rush` or `five-ninety`.
 
 ---
 
 ## List Players
 
-**`GET /api/v1/sales/player/list/`**
+**`GET /api/v1/sales/players/{game}/list/`**
 
 **Permission:** Operator or above
 
-Paginated list of all registered players with a wallet snapshot per player.
+Paginated list of players who have placed at least one ticket in the `{game}` family, each with a wallet snapshot.
 
 **Query Parameters**
 
@@ -2510,16 +2900,17 @@ Paginated list of all registered players with a wallet snapshot per player.
 
 ## Player Stats
 
-**`GET /api/v1/sales/player/stats/`**
+**`GET /api/v1/sales/players/{game}/stats/`**
 
 **Permission:** Operator or above
 
-Aggregate dashboard statistics across all players.
+Aggregate dashboard statistics for players in the `{game}` family. Counts, active-today, and wallet totals are restricted to players who have a ticket in this family.
 
 **Response `200 OK`**
 
 ```json
 {
+  "game_family": ["DR"],
   "total_players": 20,
   "active_today": 5,
   "tickets_today": 12,
@@ -2534,23 +2925,24 @@ Aggregate dashboard statistics across all players.
 
 | Field | Type | Description |
 |---|---|---|
-| `total_players` | integer | Total registered players in the system |
-| `active_today` | integer | Distinct players who placed at least one ticket today |
-| `tickets_today` | integer | Total tickets placed by players today |
-| `wallet_totals.total_balance` | decimal string | Sum of all player wallet balances |
-| `wallet_totals.total_deposited` | decimal string | Sum of all lifetime deposits |
-| `wallet_totals.total_won` | decimal string | Sum of all lifetime wins credited |
-| `wallet_totals.total_withdrawn` | decimal string | Sum of all lifetime withdrawals |
+| `game_family` | array of strings | GameType codes covered by this route, e.g. `["DR"]` or `["590_OG","590_NR","MVG"]` |
+| `total_players` | integer | Players who have placed at least one ticket in this game family |
+| `active_today` | integer | Players who placed at least one ticket in this family today |
+| `tickets_today` | integer | Tickets in this family placed today |
+| `wallet_totals.total_balance` | decimal string | Sum of wallet balances across players in this family |
+| `wallet_totals.total_deposited` | decimal string | Sum of lifetime deposits across players in this family |
+| `wallet_totals.total_won` | decimal string | Sum of lifetime wins credited across players in this family |
+| `wallet_totals.total_withdrawn` | decimal string | Sum of lifetime withdrawals across players in this family |
 
 ---
 
 ## Player Detail
 
-**`GET /api/v1/sales/player/{id}/detail/`**
+**`GET /api/v1/sales/players/{game}/{id}/detail/`**
 
 **Permission:** Operator or above
 
-Returns a single player's full profile, wallet summary, and ticket status counts.
+Returns a single player's full profile, wallet summary, and ticket status counts **scoped to the `{game}` family**. Returns `404` if the player has never placed a ticket in this family.
 
 **Path Parameters**
 
@@ -2592,23 +2984,23 @@ Returns a single player's full profile, wallet summary, and ticket status counts
 | Field | Type | Description |
 |---|---|---|
 | `wallet` | object \| null | Full wallet object including transaction history — `null` if no wallet |
-| `ticket_counts` | object | Count of tickets in each status for this player |
+| `ticket_counts` | object | Count of tickets in each status **for this game family only** |
 
 **Error Responses**
 
 | Status | Cause |
 |---|---|
-| `404` | Player UUID not found or user is not a player |
+| `404` | Player UUID not found, user is not a player, or player has no tickets in this game family |
 
 ---
 
 ## Player Tickets
 
-**`GET /api/v1/sales/player/{id}/tickets/`**
+**`GET /api/v1/sales/players/{game}/{id}/tickets/`**
 
 **Permission:** Operator or above
 
-Paginated ticket history for a specific player, newest first.
+Paginated ticket history for a specific player, **filtered to the `{game}` family**, newest first.
 
 **Path Parameters**
 
@@ -2671,17 +3063,17 @@ Paginated ticket history for a specific player, newest first.
 
 | Status | Cause |
 |---|---|
-| `404` | Player UUID not found or user is not a player |
+| `404` | Player UUID not found, user is not a player, or player has no tickets in this game family |
 
 ---
 
 ## Player Wins
 
-**`GET /api/v1/sales/player/{id}/wins/`**
+**`GET /api/v1/sales/players/{game}/{id}/wins/`**
 
 **Permission:** Operator or above
 
-Paginated win records for a specific player, newest first.
+Paginated win records for a specific player, **filtered to the `{game}` family**, newest first.
 
 **Path Parameters**
 
@@ -2730,17 +3122,19 @@ Paginated win records for a specific player, newest first.
 
 | Status | Cause |
 |---|---|
-| `404` | Player UUID not found or user is not a player |
+| `404` | Player UUID not found, user is not a player, or player has no tickets in this game family |
 
 ---
 
 ## Player Transactions
 
-**`GET /api/v1/sales/player/{id}/transactions/`**
+**`GET /api/v1/sales/players/{game}/{id}/transactions/`**
 
 **Permission:** Operator or above
 
 Paginated wallet transaction ledger for a specific player, newest first.
+
+> ⚠️ Wallets are **not** game-scoped — there is one `PlayerWallet` per player covering all games. Both the `dollar-rush` and `five-ninety` routes return identical data for the same player. The dual URL exists so the frontend can call from either dashboard without branching. However, the player must still have played the `{game}` family for the route to resolve — otherwise `404`.
 
 **Path Parameters**
 
@@ -2779,7 +3173,7 @@ Paginated wallet transaction ledger for a specific player, newest first.
 | Field | Type | Description |
 |---|---|---|
 | `tx_type` | string | `deposit` — mobile money deposit; `ticket_purchase` — ticket staked; `win_credit` — win credited; `withdrawal` — wallet withdrawal; `refund` — ticket refund |
-| `amount` | decimal string | Transaction amount in GHS |
+| `amount` | decimal string | Transaction amount in USD |
 | `balance_after` | decimal string | Wallet balance immediately after this transaction |
 | `description` | string | Human-readable description |
 | `reference_id` | UUID \| null | Reference to the related ticket, win, or payment object |
@@ -3190,7 +3584,7 @@ Paginated, unified transaction ledger for a single supervisor — merges writer 
 | `writer_name` | string | Writer's full name |
 | `writer_phone` | string \| null | Writer's phone number |
 | `reference` | string \| null | Transaction reference, or `null` if none |
-| `amount` | decimal string | Transaction amount in GHS |
+| `amount` | decimal string | Transaction amount in USD |
 | `is_credit` | boolean | `true` for top-ups (money in), `false` for withdrawals (money out) |
 
 ---
