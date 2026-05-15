@@ -77,6 +77,16 @@ All endpoints require `Authorization: Bearer <access_token>`.
 ### POS Devices (Writer Self-Service)
 - [Register POS Device](#register-pos-device)
 - [Report Device Location](#report-device-location)
+- [POS Device Locations (Map)](#pos-device-locations-map)
+
+### Events & QR Tickets
+- [Create Event](#create-event)
+- [List Events](#list-events)
+- [Issue Tickets](#issue-tickets)
+- [Send Tickets via SMS](#send-tickets-via-sms)
+- [Public Ticket Payload (for FE)](#public-ticket-payload-for-fe)
+- [List Event Tickets](#list-event-tickets)
+- [Scan Ticket at the Gate](#scan-ticket-at-the-gate)
 
 ### Players — Dashboard
 Split per game family: Dollar Rush and 5/90. Each route below has a parallel `dollar-rush` and `five-ninety` URL — see the section preamble for the mapping.
@@ -1524,6 +1534,396 @@ Returns the full `POSDevice` payload with the freshly stored location fields.
 - Coordinates overwrite the previous reading — there is no per-ping history.
 - `location_reported_at` is set server-side from `now()` on every successful call. Use it to display "last seen X seconds ago" on dashboards.
 - Decimal fields are returned as strings (per the platform-wide monetary/decimal convention).
+
+---
+
+## POS Device Locations (Map)
+
+**`GET /api/v1/writers/devices/locations/`**
+
+**Permission:** Operator or above
+
+Returns every POS device that has reported a GPS location at least once. Use to plot device pins on the admin dashboard map. Devices that have never reported a location are excluded.
+
+**Response `200 OK`**
+
+```json
+[
+  {
+    "id": "0c8f9f1e-...",
+    "serial_number": "POS-AB12345",
+    "device_type": "pos",
+    "status": "trading",
+    "latitude": "5.614818",
+    "longitude": "-0.205874",
+    "location_accuracy_m": "12.50",
+    "location_reported_at": "2026-05-14T10:24:31.412Z",
+    "writer": {
+      "id": "5d2e8b1a-...",
+      "writer_id": 32,
+      "name": "Frank Mawuli",
+      "phone": "+233244979958",
+      "status": "active"
+    }
+  }
+]
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | POS device UUID |
+| `serial_number` | string | Device serial |
+| `device_type` | string | `pos`, `app`, or `web` |
+| `status` | string | `issued`, `trading`, or `recovery` |
+| `latitude` | decimal string | Last reported latitude |
+| `longitude` | decimal string | Last reported longitude |
+| `location_accuracy_m` | decimal string \| null | Reported GPS accuracy in metres |
+| `location_reported_at` | datetime | When the device last reported. Use to flag stale pins (e.g. ">15 min ago"). |
+| `writer.id` | UUID | Writer UUID for drill-through to the writer profile page |
+| `writer.writer_id` | integer | Human-readable writer ID |
+| `writer.name` | string | Writer's full name (pin label) |
+| `writer.phone` | string \| null | Writer's phone (E.164) |
+| `writer.status` | string | Writer's current status: `active`, `passive`, `inactive`, `recover`, `no_use` |
+
+**Notes**
+
+- Response is a flat array, ordered by `location_reported_at` descending (freshest first).
+- No pagination — POS device fleets are small (~hundreds at most) and the map needs everything at once. If fleet size ever grows past ~5k, we'll add filters.
+- Frontend can colour-code pins by `status` or `writer.status`, and grey-out pins where `location_reported_at` is older than your chosen freshness threshold.
+
+---
+
+# Events & QR Tickets
+
+End-to-end ticketing for invite-only events. The admin creates an event, issues tickets (which **also sends the SMS invitations** in the same step), and gate staff scan the QRs at the entrance with single-use validation. Each player receives an SMS with a link to a personal QR ticket page.
+
+**Why SMS, not WhatsApp**
+
+Not every player has the WhatsApp bot — many play through writers and were only ever a phone number on file. WhatsApp Cloud API also restricts free-form messages to a 24-hour session window after the player's last bot interaction, which most event invitees will be outside of. SMS works on every phone without an opt-in or session window, so the QR-link SMS is our delivery channel for event tickets.
+
+**Lifecycle**
+
+`ISSUED` (created — SMS is queued immediately by [Issue Tickets](#issue-tickets)) → `DELIVERED` (Sailup confirmed the SMS) → `SCANNED` (used at the gate).
+
+A ticket that fails Sailup delivery stays at `ISSUED` with a `delivery_error` recorded; an admin can retry it via [Send Tickets](#send-tickets-via-sms). An admin can also `REVOKE` a ticket to invalidate it at any stage.
+
+**Scoping**
+
+- Event and ticket management: **operator or above**.
+- The scan endpoint: **writer or above** — so a writer-role gate-staff account can scan without needing operator privileges.
+
+**Race-safety**
+
+The scan endpoint takes a row-level lock on the ticket before flipping its status, so two simultaneous scans of the same QR can never both succeed.
+
+---
+
+## Create Event
+
+**`POST /api/v1/events/`**
+
+**Permission:** Operator or above
+
+**Request Body**
+
+```json
+{
+  "name": "AMS1One Anniversary Party",
+  "venue": "La Palm Royal Beach Hotel, Accra",
+  "event_date": "2026-06-15T19:00:00Z",
+  "description": "Invite-only celebration for top players and partners."
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | Yes | Event name (max 120 chars) |
+| `event_date` | datetime | Yes | When the event starts |
+| `venue` | string | No | Free-text venue |
+| `description` | string | No | Free-text description |
+
+**Response `201 Created`**
+
+```json
+{
+  "id": "9a3f6e1c-...",
+  "name": "AMS1One Anniversary Party",
+  "venue": "La Palm Royal Beach Hotel, Accra",
+  "event_date": "2026-06-15T19:00:00Z",
+  "description": "Invite-only celebration for top players and partners.",
+  "is_active": true,
+  "ticket_count": 0,
+  "created_at": "2026-05-14T10:00:00Z",
+  "updated_at": "2026-05-14T10:00:00Z"
+}
+```
+
+---
+
+## List Events
+
+**`GET /api/v1/events/`**
+
+**Permission:** Operator or above
+
+Returns all events newest-first, each with a `ticket_count`. Standard `GET /api/v1/events/{id}/` retrieves one.
+
+---
+
+## Issue Tickets
+
+**`POST /api/v1/events/{id}/issue-tickets/`**
+
+**Permission:** Operator or above
+
+Single-step issue + send. Creates one `EventTicket` per supplied phone number **and** immediately queues the SMS invitations via Celery. Phones are normalised to E.164. **No player account lookup happens** — any well-formed phone number gets a ticket. Phones that can't be parsed (typos, garbage) are returned in `invalid_phones`. The same phone can't be issued twice for the same event (enforced at the DB) — repeats are silently skipped. For re-sends to already-issued phones, use the [Send Tickets](#send-tickets-via-sms) endpoint.
+
+**Request Body**
+
+```json
+{
+  "phone_numbers": [
+    "+233501234567",
+    "0244979958",
+    "+233200000000"
+  ]
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `phone_numbers` | array of strings | Yes | 1–1000 phone numbers in any local or E.164 format. Server normalises before matching. |
+
+**Response `201 Created`**
+
+```json
+{
+  "created": 2,
+  "tickets": [
+    {
+      "id": "0a1b...",
+      "event": "9a3f6e1c-...",
+      "event_name": "AMS1One Anniversary Party",
+      "player_phone": "+233550000006",
+      "status": "issued",
+      "delivered_at": null,
+      "delivered_via": null,
+      "delivery_error": "",
+      "scanned_at": null,
+      "scanned_by": null,
+      "created_at": "2026-05-14T10:01:00Z"
+    }
+  ],
+  "invalid_phones": ["abc123"],
+  "queued": 2
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `created` | integer | Count of tickets newly issued |
+| `tickets` | array | The newly-issued tickets (phones already issued on this event are NOT in this list) |
+| `invalid_phones` | array of strings | Phones the server couldn't parse — typically typos or non-phone strings. The admin UI should display this so the operator can fix and re-submit. |
+| `queued` | integer | Number of SMS invitations queued for delivery (equals `created`). Each is a Celery job using the Sailup SMS provider. |
+
+**Notes**
+- SMS invitations go out asynchronously via Celery within seconds of this call. The response returns immediately while the worker processes the queue.
+- Duplicate phones in the request body are de-duplicated after normalisation.
+- Any well-formed phone gets a ticket — no requirement for the recipient to be a registered player on the platform.
+- Re-running issue-tickets with overlapping phones silently skips the duplicates (DB-level uniqueness on `(event, player_phone)`). To re-send, use [Send Tickets](#send-tickets-via-sms).
+
+---
+
+## Send Tickets via SMS
+
+**`POST /api/v1/events/{id}/send/`**
+
+**Permission:** Operator or above
+
+Re-send or retry SMS invitations for already-issued tickets. The primary path ([Issue Tickets](#issue-tickets)) sends invitations automatically when tickets are created — this endpoint is for:
+
+- Retrying tickets where the initial SMS failed (still in `issued` status with a `delivery_error`)
+- Re-sending the link to a player who lost their SMS
+- Sending invitations for tickets that were issued before this auto-send behaviour existed
+
+Non-blocking: queues Celery jobs and returns immediately. SMS goes via the existing Sailup integration.
+
+**Request Body** — pass exactly one of:
+
+```json
+{ "ticket_ids": ["0a1b...", "0c2d..."] }
+```
+
+```json
+{ "all_undelivered": true }
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `ticket_ids` | array of UUIDs | Conditional | Specific tickets in this event to send |
+| `all_undelivered` | boolean | Conditional | If true, send to every ticket currently in `issued` status |
+
+**Response `202 Accepted`**
+
+```json
+{ "queued": 2 }
+```
+
+**Behaviour per ticket**
+
+- Tries up to 3 times with exponential backoff if Sailup rejects the SMS.
+- On success: `status → delivered`, `delivered_at` set, `delivered_via = "sms"`.
+- On final failure: the error message is captured on `delivery_error`. The ticket stays `issued` so you can retry by calling this endpoint again.
+- Tickets in `scanned` or `revoked` status are rejected.
+
+**SMS body**
+
+```
+Your ticket for AMS1One Anniversary on Sat 15 Jun, 19:00. View & show at
+the gate: https://app.ams1one.com/tickets/x7Pq8wA1z2_yVbH3kRMnL4uG
+```
+
+The link points to the **frontend** — players tap it, the FE app renders the QR client-side, and they show it at the gate. The backend URL is never exposed in player-facing messages.
+
+**Configuration**
+
+| Env var | Default | Description |
+|---|---|---|
+| `FRONTEND_BASE_URL` | `http://localhost:5173` | Scheme + host of the FE app (no trailing slash) |
+| `FRONTEND_TICKET_PATH` | `/tickets/{token}` | Path on the FE that renders a ticket. Must contain `{token}`. |
+
+The final SMS link is `{FRONTEND_BASE_URL}{FRONTEND_TICKET_PATH.format(token=...)}`.
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `400` | Neither `ticket_ids` nor `all_undelivered` supplied; or `ticket_ids` includes IDs from another event |
+| `403` | Caller is not operator or above |
+
+---
+
+## List Event Tickets
+
+**`GET /api/v1/events/{id}/tickets/`**
+
+**Permission:** Operator or above
+
+Returns all tickets for an event, with player and status details. Useful for the admin's "send progress" view.
+
+**Query Parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `status` | string | Filter: `issued`, `delivered`, `scanned`, `revoked` |
+
+**Response `200 OK`** — array of ticket objects (same shape as the [Issue Tickets](#issue-tickets) response body).
+
+---
+
+## Public Ticket Payload (for FE)
+
+**`GET /api/v1/events/public/<token>/`**
+
+**Permission:** Public (no auth)
+
+Returns the event + ticket details the **frontend** needs to render its ticket page. The QR itself is generated client-side from the `token` — the backend doesn't serve any HTML or images for player-facing pages.
+
+**Why this is unauthenticated**
+
+The `token` *is* the credential. Anyone with the SMS link can fetch this payload; gating with auth would block the player we just SMSed. The token is 32 chars of URL-safe random, so guessing is not feasible.
+
+**Path parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `token` | string | The ticket token from the SMS link |
+
+**Response `200 OK`**
+
+```json
+{
+  "event": {
+    "name": "AMS1One Anniversary Party",
+    "event_date": "2026-06-15T19:00:00Z",
+    "venue": "La Palm Royal Beach Hotel, Accra",
+    "is_active": true
+  },
+  "ticket": {
+    "token": "x7Pq8wA1z2_yVbH3kRMnL4uG",
+    "status": "delivered",
+    "scanned_at": null
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `event.name` | string | Event name |
+| `event.event_date` | datetime | Event start (ISO 8601) |
+| `event.venue` | string | Venue, may be empty |
+| `event.is_active` | boolean | False means scanning is disabled |
+| `ticket.token` | string | Same token from the URL — encode this into the QR |
+| `ticket.status` | string | `issued`, `delivered`, `scanned`, or `revoked` |
+| `ticket.scanned_at` | datetime \| null | When the ticket was used at the gate |
+
+**Error Responses**
+
+| Status | Cause |
+|---|---|
+| `404` | No ticket with that token exists |
+
+**Frontend integration**
+
+1. FE has a route `/tickets/:token` (this is what's in the SMS link)
+2. On mount, FE calls `GET /api/v1/events/public/<token>/`
+3. FE renders the QR client-side from `ticket.token` using a JS library (`qrcode`, `qrcode.react`, etc.)
+4. FE shows event details + the QR. If `ticket.status === "scanned"` or `"revoked"`, show a banner explaining and don't render a usable QR.
+5. Gate staff later scans the QR → FE's scanner page POSTs `token` to `/api/v1/events/scan/`.
+
+---
+
+## Scan Ticket at the Gate
+
+**`POST /api/v1/events/scan/`**
+
+**Permission:** Writer or above
+
+Validates a scanned token at the entrance. Atomically marks the ticket as `scanned`. Subsequent scans of the same token return a conflict.
+
+**Request Body**
+
+```json
+{ "token": "x7Pq8wA1z2_yVbH3kRMnL4uG" }
+```
+
+The frontend scan page decodes the QR image, extracts the token, and POSTs it here.
+
+**Response `200 OK`** — entry approved:
+
+```json
+{
+  "ticket_id": "0a1b...",
+  "event_name": "AMS1One Anniversary Party",
+  "player_phone": "+233550000006",
+  "scanned_at": "2026-06-15T19:14:22Z"
+}
+```
+
+**Error Responses**
+
+| Status | Code | Cause |
+|---|---|---|
+| `404` | `ticket_token_invalid` | No ticket matches that token (counterfeit QR or typo) |
+| `409` | `ticket_already_scanned` | Token was previously used — message includes when and by whom |
+| `409` | `ticket_revoked` | Admin has invalidated this ticket |
+| `409` | `ticket_not_delivered` | Ticket exists but was never sent to the player |
+| `409` | `event_inactive` | The event itself has been deactivated |
+
+**Frontend integration notes**
+- Show a big green tick or red X based on `200` vs error.
+- For `ticket_already_scanned`, show the previous scan time so staff can spot duplicate attendees.
+- The scanner page should debounce — accidentally double-scanning the same QR within a few hundred milliseconds will give the user the impression of a duplicate. (The backend handles the real race correctly, but the second response will be a 409.)
 
 ---
 
