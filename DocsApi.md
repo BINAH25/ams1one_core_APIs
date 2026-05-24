@@ -4,6 +4,10 @@
 
 All endpoints require `Authorization: Bearer <access_token>`.
 
+### File URLs
+
+User and writer media (photos, ID cards) and APK releases are stored in a private S3 bucket. Any field that exposes a file URL — `photo_url`, `id_card_image_url`, `apk_url` — returns a **presigned S3 URL valid for 1 hour** from the moment the response was built. Do not cache these URLs longer than that, and don't construct them client-side from a filename; always render whatever the API returns.
+
 ---
 
 ## Table of Contents
@@ -106,6 +110,9 @@ Split per game family: Dollar Rush and 5/90. Each route below has a parallel `do
 - [Summary](#summary)
 - [Writers Overview](#writers-overview)
 - [Transactions](#transactions)
+
+### Admin Payouts
+- [Send Admin Payout](#send-admin-payout)
 
 
 ### Reports
@@ -529,6 +536,7 @@ These are the keys the backend recognises. Frontend menu registry must use the e
 | Supervisors | `supervisors.summary` | Supervisor Summary |
 | Supervisors | `supervisors.writers_overview` | Writers Overview |
 | Supervisors | `supervisors.transactions` | Supervisor Transactions |
+| Admin Payouts | `admin_payouts.send` | Send Admin Payout |
 | Reports | `reports.list` | List Reports |
 | Reports | `reports.execute` | Execute Report |
 | Reports | `reports.download` | Download Report |
@@ -668,7 +676,7 @@ Returns per-writer sales, stakes, and top-up totals.
 
 **Permission:** Operator or above
 
-Paginated detailed ticket list with stake and writer information.
+Paginated detailed ticket list with stake and writer information. **Returns tickets sold today only** (server-side `sold_at::date = today` in the configured timezone — currently UTC). Use the report endpoints if you need a different date range.
 
 ```json
 {
@@ -687,9 +695,9 @@ Paginated detailed ticket list with stake and writer information.
         {
           "stake_id": "03dc36ce-c5fc-48bd-8130-0b40aa9a6e78",
           "created_at": "2026-04-27 22:16:00",
-          "game": { "id": "0cd0be0b-...", "name": "VAG", "code": "MVG" },
+          "game": { "id": "0cd0be0b-...", "name": "Morning Dew", "code": "MVG" },
           "event_id": "e2234779-...",
-          "event": "VAG Tuesday",
+          "event": "Morning Dew Tuesday",
           "play_group": "Direct",
           "play": "Direct 2 (2 Sure)",
           "numbers": "24,69",
@@ -841,7 +849,7 @@ Returns today's draw events with their winning numbers.
   "events": [
     {
       "event_id": 828,
-      "event_name": "Morning VAG",
+      "event_name": "Morning Dew",
       "event_no": 828,
       "winning_numbers": [43, 5, 90, 56, 70]
     }
@@ -1287,7 +1295,7 @@ Paginated ticket sales for a specific writer, newest first.
       "total_amount": "3.00",
       "event_no": 137,
       "event_name": "Tuesday Noon Rush",
-      "game": "VAG",
+      "game": "Morning Dew",
       "stake_count": 2,
       "status": "lost",
       "plays": [
@@ -1321,7 +1329,7 @@ Paginated winnings for a specific writer, newest first.
       "ticket_no": "202604271200000032018291",
       "event_no": 136,
       "event_name": "Monday Special",
-      "game": "VAG",
+      "game": "Morning Dew",
       "stake_amount": "5.00",
       "win_amount": "125.00",
       "status": "claimed",
@@ -1416,6 +1424,103 @@ Paginated successful withdrawal history for a specific writer, newest first.
 | `reference` | string | Paystack transfer reference |
 | `amount` | decimal string | Amount withdrawn in USD |
 | `status` | string | Always `success` (only successful cashouts are returned) |
+
+---
+
+# Admin Payouts
+
+Send real money directly to any mobile money number via Paystack. Funds come from the company's Paystack balance — there is no source wallet to debit. Use this for ad-hoc disbursements, refunds outside the writer ledger, or supplier payouts.
+
+---
+
+## Send Admin Payout {#send-admin-payout}
+
+**`POST /api/v1/payments/admin-payout/`**
+
+**Permission:** Admin only
+
+Initiates a Paystack mobile money transfer to an arbitrary phone number. The endpoint is **strictly idempotent** — the client must supply an `Idempotency-Key` header. A retry with the same key from the same admin returns the original payout and never starts a second transfer.
+
+**Headers**
+
+| Header | Required | Description |
+|---|---|---|
+| `Authorization` | yes | `Bearer <access_token>` (admin role) |
+| `Idempotency-Key` | yes | Client-generated key, 1–100 chars. Reuse across retries of the same logical request. |
+
+**Request body**
+
+```json
+{
+  "amount": "50.00",
+  "mobile_number": "+233501234567",
+  "mobile_provider": "MTN",
+  "recipient_name": "Test Recipient",
+  "description": "Salary advance"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `amount` | decimal string | yes | Amount in USD. Minimum `0.01`. |
+| `mobile_number` | string | yes | Recipient phone in E.164 format (e.g. `+233501234567`). |
+| `mobile_provider` | string | yes | One of `MTN`, `VOD` (Vodafone Cash), `ATL` (AirtelTigo). |
+| `recipient_name` | string | yes | Display name on the Paystack transfer. ≤150 chars. |
+| `description` | string | no | Free-text reason for the payout. ≤255 chars. Sent to Paystack as the transfer reason. |
+
+**Response `201 Created`**
+
+```json
+{
+  "id": "8e21f4c8-3a47-4b8d-9aef-ce6c1b5d7f10",
+  "reference": "ADP-9F4A1C2B6E0D8512",
+  "amount": "50.00",
+  "mobile_number": "+233501234567",
+  "mobile_provider": "MTN",
+  "recipient_name": "Test Recipient",
+  "description": "Salary advance",
+  "status": "pending",
+  "paystack_recipient_code": "RCP_xxxxxx",
+  "paystack_transfer_code": "TRF_xxxxxx",
+  "idempotency_key": "abc-123",
+  "created_at": "2026-05-24T10:15:00Z",
+  "updated_at": "2026-05-24T10:15:00Z"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `reference` | string | Server-generated transfer reference, always prefixed `ADP-`. |
+| `status` | string | `pending` immediately after the call. Flips to `success` or `failed` when Paystack's webhook arrives. **Do not show "sent" to the user until status flips to `success`.** |
+| `paystack_recipient_code` | string | Paystack recipient ID (RCP_…). Empty if the transfer initialisation hadn't succeeded yet. |
+| `paystack_transfer_code` | string | Paystack transfer ID (TRF_…). Same caveat. |
+
+**Idempotency semantics**
+
+- The key is scoped per admin: `(idempotency_key, created_by)` must be unique. Two different admins may use the same key value without colliding.
+- Retrying with the same key but a **different body** still returns the original payout — the new body is ignored. This is intentional: if the first call succeeded at Paystack, replaying with new amounts would silently send more money.
+- There is no expiry: a key is reserved forever once used by that admin.
+
+**Error responses**
+
+| Status | When |
+|---|---|
+| `400 Bad Request` | Missing or oversized `Idempotency-Key`, invalid body (amount ≤ 0, bad phone, unknown provider), **or** Paystack rejected the transfer (`PaystackError`). On Paystack rejection the `AdminPayout` row is still recorded with `status: "failed"` for the audit trail. |
+| `403 Forbidden` | Caller is not an admin. |
+
+**Note on retrying after a failure**: if the first call returns 400 because Paystack rejected the transfer, the row is recorded as `failed` against that idempotency key. Retrying with the **same** key returns that failed row, not a fresh attempt. To actually retry the transfer, generate a new `Idempotency-Key`.
+
+**Lifecycle**
+
+```
+POST → AdminPayout row created (status=pending) → Paystack accepts (returns codes)
+                                                ↓
+                                    webhook transfer.success → status=success
+                                                or
+                                    webhook transfer.failed/reversed → status=failed
+```
+
+The webhook is shared with writer withdrawals. References starting with `ADP-` are routed to the `AdminPayout` table; references starting with `WD-` continue to update `Withdrawal` rows.
 
 ---
 
@@ -2526,10 +2631,10 @@ Returns today's events eligible for auto-draw — events with `draw_date = today
   {
     "id": "5e85fb71-7b5f-4b4a-b516-0799778a70e6",
     "event_no": 244,
-    "game_type_name": "VAG",
+    "game_type_name": "Morning Dew",
     "draw_date": "2026-04-30",
     "status": "open",
-    "label": "#244 — VAG (30 Apr 2026)"
+    "label": "#244 — Morning Dew (30 Apr 2026)"
   },
   {
     "id": "1774c0fe-8b10-426a-8949-012ddfddde9f",
@@ -3229,7 +3334,7 @@ Player endpoints are split per game family. Each endpoint exists under two paral
 | Game family | Base URL | Game type codes covered |
 |---|---|---|
 | Dollar Rush | `/api/v1/sales/players/dollar-rush/` | `DR` |
-| 5/90 (Original, Noonrush, Morning VAG) | `/api/v1/sales/players/five-ninety/` | `590_OG`, `590_NR`, `MVG` |
+| 5/90 (Original, Noonrush, Morning Dew) | `/api/v1/sales/players/five-ninety/` | `590_OG`, `590_NR`, `MVG` |
 
 **Permission:** Operator or above on every endpoint.
 
