@@ -114,6 +114,10 @@ Split per game family: Dollar Rush and 5/90. Each route below has a parallel `do
 ### Admin Payouts
 - [Send Admin Payout](#send-admin-payout)
 
+### App Releases
+- [Get Latest Release](#get-latest-release)
+- [Upload Release](#upload-release)
+
 
 ### Reports
 - [List Reports](#list-reports)
@@ -1521,6 +1525,85 @@ POST → AdminPayout row created (status=pending) → Paystack accepts (returns 
 ```
 
 The webhook is shared with writer withdrawals. References starting with `ADP-` are routed to the `AdminPayout` table; references starting with `WD-` continue to update `Withdrawal` rows.
+
+---
+
+# App Releases
+
+Distributes the writer-facing Android APK. Admin uploads a new build; writer devices fetch the latest published release on launch.
+
+---
+
+## Get Latest Release {#get-latest-release}
+
+**`GET /api/v1/releases/latest/`**
+
+**Permission:** Public (no `Authorization` header required). Called by the writer app on startup before the user logs in.
+
+Returns the most recently uploaded **published** release, or null fields when no release exists.
+
+**Response `200 OK` — release available**
+
+```json
+{
+  "version": "1.4.2",
+  "apk_url": "https://s3.eu-west-1.amazonaws.com/ams1one-staging/releases/apks/app-1.4.2.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=3600&X-Amz-Signature=..."
+}
+```
+
+**Response `200 OK` — no release yet**
+
+```json
+{
+  "version": null,
+  "apk_url": null
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `version` | string \| null | Free-form version string set at upload time (e.g. `"1.4.2"`). Not semver-validated. |
+| `apk_url` | string \| null | **Presigned S3 URL, valid for 1 hour.** Do not cache; call this endpoint immediately before downloading. |
+
+**Behaviour notes**
+
+- "Latest" means the **most recently created** published row (ordered by `created_at` DESC), not the highest version number. If you upload `1.5.0` and then upload `1.4.5` afterwards (e.g. a rollback), `1.4.5` becomes "latest". Intentional — re-uploading an older version is the rollback mechanism.
+- Rows with `is_published=false` are excluded. Unpublishing is currently done via Django admin.
+
+---
+
+## Upload Release {#upload-release}
+
+**`POST /api/v1/releases/upload/`**
+
+**Permission:** Admin only
+
+Uploads a new APK to S3 and records it as a release. Content type must be `multipart/form-data`.
+
+**Request body (multipart/form-data)**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `version` | string | yes | Display version (≤20 chars), e.g. `"1.4.2"`. Not validated as semver, not unique. |
+| `apk_file` | file | yes | The APK binary. Uploaded to `s3://<bucket>/releases/apks/`. |
+| `release_notes` | string | no | Free-text release notes. Defaults to empty. |
+| `is_published` | boolean | no | If `false`, the release is recorded but excluded from `GET /latest/`. Defaults to `true`. |
+
+**Response `201 Created`**
+
+```json
+{
+  "version": "1.4.2",
+  "apk_url": "https://s3.eu-west-1.amazonaws.com/ams1one-staging/releases/apks/app-1.4.2.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=3600&X-Amz-Signature=..."
+}
+```
+
+**Error responses**
+
+| Status | When |
+|---|---|
+| `400 Bad Request` | Missing `version` or `apk_file`; validation failure. Errors flattened per project convention. |
+| `403 Forbidden` | Caller is not an admin. |
 
 ---
 
