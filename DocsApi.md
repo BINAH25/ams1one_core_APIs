@@ -116,7 +116,9 @@ Split per game family: Dollar Rush and 5/90. Each route below has a parallel `do
 
 ### App Releases
 - [Get Latest Release](#get-latest-release)
-- [Upload Release](#upload-release)
+- [Upload Release (small files)](#upload-release)
+- [Presign Release Upload](#presign-release-upload)
+- [Finalize Release Upload](#finalize-release-upload)
 
 
 ### Reports
@@ -1580,6 +1582,8 @@ Returns the most recently uploaded **published** release, or null fields when no
 
 Uploads a new APK to S3 and records it as a release. Content type must be `multipart/form-data`.
 
+> **Use this only for small APKs.** Railway's edge proxy caps request bodies well below typical release sizes, so anything in the tens of MB or larger is rejected before it reaches the API (the browser sees a `403` with no `Access-Control-Allow-Origin` header). For production-sized APKs use the two-step [Presign Release Upload](#presign-release-upload) → S3 PUT → [Finalize Release Upload](#finalize-release-upload) flow, which streams bytes directly from the browser to S3 and bypasses the application server entirely.
+
 **Request body (multipart/form-data)**
 
 | Field | Type | Required | Description |
@@ -1604,6 +1608,120 @@ Uploads a new APK to S3 and records it as a release. Content type must be `multi
 |---|---|
 | `400 Bad Request` | Missing `version` or `apk_file`; validation failure. Errors flattened per project convention. |
 | `403 Forbidden` | Caller is not an admin. |
+
+---
+
+## Presign Release Upload {#presign-release-upload}
+
+**`POST /api/v1/releases/presign-upload/`**
+
+**Permission:** Admin only
+
+First step of the **direct-to-S3 upload flow** for large APKs. Returns a short-lived presigned S3 `PUT` URL that the browser uses to upload the file straight to S3, bypassing the application server. Pair with [Finalize Release Upload](#finalize-release-upload).
+
+**Request Body**
+
+```json
+{
+  "filename": "ams1one-1.5.0.apk",
+  "content_type": "application/vnd.android.package-archive"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `filename` | string | yes | Original filename. Only the `.apk` suffix is preserved on the generated S3 key; the rest of the name is replaced with a UUID. |
+| `content_type` | string | no | MIME type. Must match the `Content-Type` header on the subsequent S3 PUT request exactly, or S3 rejects the signature. Defaults to `application/vnd.android.package-archive`. |
+
+**Response `200 OK`**
+
+```json
+{
+  "upload_url": "https://ams1one-staging.s3.eu-west-1.amazonaws.com/releases/apks/8f0c...e7.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=600&X-Amz-Signature=...",
+  "key": "releases/apks/8f0c...e7.apk",
+  "expires_in": 600
+}
+```
+
+| Field | Description |
+|---|---|
+| `upload_url` | Presigned S3 PUT URL, valid for `expires_in` seconds. Send the raw file bytes as the request body — **not** as `multipart/form-data`. **Do not** attach `Authorization`; the URL is already signed. |
+| `key` | The S3 object key the file will be stored under. Pass this back unchanged to `finalize/` once the PUT succeeds. |
+| `expires_in` | TTL of `upload_url`, in seconds. Currently 600 (10 minutes). |
+
+**Step 2 — upload the file to S3 directly**
+
+```
+PUT <upload_url>
+Content-Type: application/vnd.android.package-archive   ← must match the value sent to presign-upload
+Body: <raw APK bytes>
+```
+
+This request goes straight from the browser to AWS S3. Railway is not in the path, so the body size limit does not apply. A `200 OK` from S3 indicates success; proceed to finalize.
+
+**Error responses**
+
+| Status | When |
+|---|---|
+| `400 Bad Request` | Missing `filename`. |
+| `403 Forbidden` | Caller is not an admin. |
+
+---
+
+## Finalize Release Upload {#finalize-release-upload}
+
+**`POST /api/v1/releases/finalize/`**
+
+**Permission:** Admin only
+
+Second step of the direct-to-S3 upload flow. After the browser successfully `PUT`s the APK to the presigned URL, call this endpoint to record the release in the database. The server performs an S3 `HEAD` on the key to confirm the object exists before creating the row.
+
+**Request Body**
+
+```json
+{
+  "version": "1.5.0",
+  "key": "releases/apks/8f0c...e7.apk",
+  "release_notes": "Adds Dollar Rush admin flow.",
+  "is_published": true
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `version` | string | yes | Display version (≤20 chars). Not validated as semver, not unique. |
+| `key` | string | yes | The S3 key returned by [Presign Release Upload](#presign-release-upload). |
+| `release_notes` | string | no | Free-text release notes. Defaults to empty. |
+| `is_published` | boolean | no | If `false`, the release is recorded but excluded from `GET /latest/`. Defaults to `true`. |
+
+**Response `201 Created`**
+
+```json
+{
+  "version": "1.5.0",
+  "apk_url": "https://ams1one-staging.s3.eu-west-1.amazonaws.com/releases/apks/8f0c...e7.apk?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=3600&X-Amz-Signature=..."
+}
+```
+
+**Error responses**
+
+| Status | When |
+|---|---|
+| `400 Bad Request` | Missing `version` or `key`; the `key` was never uploaded (S3 `HEAD` failed). Errors flattened per project convention. |
+| `403 Forbidden` | Caller is not an admin. |
+
+**Notes**
+
+- The presigned `apk_url` returned in step 3 uses the standard 1-hour TTL from `AWS_QUERYSTRING_EXPIRE`, the same as every other media URL in the API.
+- The S3 bucket needs a CORS rule allowing `PUT` from the admin origin. Example:
+  ```json
+  [{
+    "AllowedOrigins": ["https://ams1one-admin-production.up.railway.app"],
+    "AllowedMethods": ["PUT", "GET"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"]
+  }]
+  ```
 
 ---
 
