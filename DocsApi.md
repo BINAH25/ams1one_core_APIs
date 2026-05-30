@@ -1357,7 +1357,7 @@ Paginated winnings for a specific writer, newest first.
 
 ---
 
-## Writer Top-Ups (Admin) {#writer-top-ups-admin}
+## Writer Top-Ups (Admin)
 
 **`GET /api/v1/writers/{pk}/writer-topups/`**
 
@@ -1536,7 +1536,8 @@ Distributes the writer-facing Android APK. Admin uploads a new build; writer dev
 
 ---
 
-## Get Latest Release {#get-latest-release}
+<a id="get-latest-release"></a>
+## Get Latest Release
 
 **`GET /api/v1/releases/latest/`**
 
@@ -1574,7 +1575,8 @@ Returns the most recently uploaded **published** release, or null fields when no
 
 ---
 
-## Upload Release {#upload-release}
+<a id="upload-release"></a>
+## Upload Release
 
 **`POST /api/v1/releases/upload/`**
 
@@ -1611,7 +1613,8 @@ Uploads a new APK to S3 and records it as a release. Content type must be `multi
 
 ---
 
-## Presign Release Upload {#presign-release-upload}
+<a id="presign-release-upload"></a>
+## Presign Release Upload
 
 **`POST /api/v1/releases/presign-upload/`**
 
@@ -1668,7 +1671,8 @@ This request goes straight from the browser to AWS S3. Railway is not in the pat
 
 ---
 
-## Finalize Release Upload {#finalize-release-upload}
+<a id="finalize-release-upload"></a>
+## Finalize Release Upload
 
 **`POST /api/v1/releases/finalize/`**
 
